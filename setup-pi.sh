@@ -89,7 +89,7 @@ APP_ENV_FILE="/etc/default/${APP_NAME}"
 APP_WORKDIR=""
 
 APP_CPU_QUOTA="85%"
-APP_MEM_MAX="256M"
+APP_MEM_MAX="1.2G"
 APP_NICE="5"
 APP_DEADMAN_EVERY="6h"
 APP_HEARTBEAT_EVERY="5m"
@@ -207,8 +207,8 @@ use-my-ip = 0
 user-id = 5272237815 
 
 # no-updates 
-disable-gpu 
-no-sandbox
+# disable-gpu 
+# no-sandbox
 EOF
 
 chown "${SUDO_USER:-${USER}}":"${SUDO_USER:-${USER}}" "${INI_PATH}"
@@ -910,7 +910,7 @@ if [[ "${INSTALL_HARDENED_APP:-0}" == "1" ]]; then
     exit 1
   fi
     RUN_AS="${APP_USER:-root}" WORKDIR="${APP_WORKDIR}" ENV_FILE="${APP_ENV_FILE}" \
-    CPU_QUOTA="${APP_CPU_QUOTA:-30%}" MEM_MAX="${APP_MEM_MAX:-256M}" NICE="${APP_NICE:-5}" \
+    CPU_QUOTA="${APP_CPU_QUOTA:-85%}" MEM_MAX="${APP_MEM_MAX:-1.2G}" NICE="${APP_NICE:-5}" \
       /usr/local/bin/service-hardened.sh install-service "${APP_NAME}" "${APP_EXECSTART}"
 else
   echo "Skipping hardened app service (INSTALL_HARDENED_APP=0)"
