@@ -1,6 +1,77 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+teardown_previous_install() {
+  echo "==> Teardown: stop/disable/remove prior units (if present)"
+
+  # 1) Stop active units (won't error if not running)
+  sudo systemctl stop mhddos_proxy_linux.service 2>/dev/null || true
+  sudo systemctl stop mhddos_proxy_linux-heartbeat.timer mhddos_proxy_linux-restart.timer 2>/dev/null || true
+  sudo systemctl stop mhddos_proxy_linux-heartbeat.service mhddos_proxy_linux-restart.service 2>/dev/null || true
+  sudo systemctl stop net-watchdog.timer net-watchdog.service 2>/dev/null || true
+  sudo systemctl disable net-watchdog.timer 2>/dev/null || true
+  sudo rm -f /etc/systemd/system/net-watchdog.service /etc/systemd/system/net-watchdog.timer
+  sudo rm -f /usr/local/bin/net-watchdog.sh
+
+  sudo systemctl list-unit-files | awk '{print $1}' \
+    | grep -Ei '^mhddos_proxy_linux(\.|-).*(service|timer)$|^mhddos_proxy_linux\.service$' \
+    | while read -r u; do
+        sudo systemctl stop "$u" 2>/dev/null || true
+        sudo systemctl disable "$u" 2>/dev/null || true
+      done
+
+  # 2) Disable autostart
+  sudo systemctl disable mhddos_proxy_linux.service 2>/dev/null || true
+  sudo systemctl disable mhddos_proxy_linux-heartbeat.timer mhddos_proxy_linux-restart.timer 2>/dev/null || true
+
+  # 3) Mask to prevent manual start while we’re removing files
+  sudo systemctl mask mhddos_proxy_linux.service 2>/dev/null || true
+  sudo systemctl mask mhddos_proxy_linux-heartbeat.timer mhddos_proxy_linux-restart.timer 2>/dev/null || true
+
+  # 4) Remove unit files + drop-ins (yours are in /etc/systemd/system)
+  sudo rm -f /etc/systemd/system/mhddos_proxy_linux.service
+  sudo rm -rf /etc/systemd/system/mhddos_proxy_linux.service.d
+
+  sudo rm -f /etc/systemd/system/mhddos_proxy_linux-heartbeat.service
+  sudo rm -f /etc/systemd/system/mhddos_proxy_linux-restart.service
+  sudo rm -f /etc/systemd/system/mhddos_proxy_linux-heartbeat.timer
+  sudo rm -f /etc/systemd/system/mhddos_proxy_linux-restart.timer
+
+  # 5) Reload systemd and clear fail counters
+  sudo systemctl daemon-reload
+  sudo systemctl reset-failed
+
+  # 6) Unmask (optional) if you want future installs to be able to recreate/start cleanly
+  sudo systemctl unmask mhddos_proxy_linux.service 2>/dev/null || true
+  sudo systemctl unmask mhddos_proxy_linux-heartbeat.timer mhddos_proxy_linux-restart.timer 2>/dev/null || true
+  sudo systemctl daemon-reload
+  
+  # 7) Remove env file (optional). Keeping it is usually fine, but stale values can bite you.
+  if [[ "${WIPE_ENV:-0}" == "1" ]]; then
+    echo "WIPE_ENV=1 set; deleting /etc/default/mhddos_proxy_linux"
+    sudo rm -f /etc/default/mhddos_proxy_linux
+  else
+    echo "Keeping env file /etc/default/mhddos_proxy_linux (WIPE_ENV=0)"
+  fi
+
+  # 8) Remove state/log/runtime directories if YOU created them and it’s safe to wipe
+  # (StateDirectory=mhddos_proxy_linux => /var/lib/mhddos_proxy_linux)
+  # Keep state by default (often includes useful history).
+  # If you want a true clean wipe, run with WIPE_STATE=1
+  if [[ "${WIPE_STATE:-0}" == "1" ]]; then
+    echo "WIPE_STATE=1 set; deleting /var/lib/mhddos_proxy_linux"
+    sudo rm -rf /var/lib/mhddos_proxy_linux
+  else
+    echo "Keeping state in /var/lib/mhddos_proxy_linux (WIPE_STATE=0)"
+  fi
+
+  # /run is tmpfs; it resets on reboot anyway, but remove if it exists
+  sudo rm -rf /run/mhddos_proxy_linux
+
+  echo "==> Teardown complete"
+}
+
+
 # =========================
 # Fresh Debian Trixie Pi setup (headless-friendly)
 # Focus: stable networking + sane logging + basic tooling
@@ -12,15 +83,17 @@ APP_NAME="mhddos_proxy_linux"
 APP_USER="pi"
 
 START_SCRIPT="${APP_NAME}-worker.sh"
-APP_EXECSTART="/opt/itarmy/bin/${APP_NAME}-worker.sh"
+APP_EXECSTART="/usr/local/bin/${START_SCRIPT}"
+APP_ENV_FILE="/etc/default/${APP_NAME}"
 
-APP_WORKDIR="/"
+APP_WORKDIR=""
+
 APP_CPU_QUOTA="85%"
 APP_MEM_MAX="256M"
 APP_NICE="5"
 APP_DEADMAN_EVERY="6h"
 APP_HEARTBEAT_EVERY="5m"
-#APP_DEB_URL="${APP_DEB_URL:-https://github.com/it-army-ua-scripts/itarmykit/releases/latest/download/itarmykit-linux-arm64.deb}"
+#APP_DEB_URL="${APP_DEB_URL:-https://github.com/it-army-ua-scripts/ITARMYkit/releases/latest/download/ITARMYkit-linux-arm64.deb}"
 IFACE="${IFACE:-wlan0}"
 COOLDOWN_S="${COOLDOWN_S:-180}"       # reconnect cooldown
 TIMER_SEC="${TIMER_SEC:-60}"          # watchdog cadence
@@ -37,9 +110,7 @@ REACH_FAIL_MAX="${REACH_FAIL_MAX:-12}"
 # ---- ITARMY installer + runtime ----
 ITARMY_INSTALL_URL="${ITARMY_INSTALL_URL:-https://raw.githubusercontent.com/it-army-ua-scripts/ADSS/install/install.sh}"
 ITARMY_INSTALLER_PATH="${ITARMY_INSTALLER_PATH:-/opt/itarmy/bin/}"
-
 ITARMY_BIN="${ITARMY_BIN:-/opt/itarmy/bin/mhddos_proxy_linux}"
-
 ITARMY_LANG="${ITARMY_LANG:-en}"
 ITARMY_USER_ID="${ITARMY_USER_ID:-5272237815}"
 ITARMY_COPIES="${ITARMY_COPIES:-1}"
@@ -47,6 +118,25 @@ ITARMY_THREADS="${ITARMY_THREADS:-4032}"
 
 
 need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; exit 1; }; }
+
+is_raspberry_pi() {
+  local model=""
+  if [[ -r /proc/device-tree/model ]]; then
+    model="$(tr -d '\0' </proc/device-tree/model || true)"
+  fi
+  [[ "$model" == *"Raspberry Pi"* ]]
+}
+
+pi_guard() {
+  if ! is_raspberry_pi; then
+    echo "ERROR: This setup script is intended ONLY for Raspberry Pi hardware."
+    echo "Detected model: $(tr -d '\0' </proc/device-tree/model 2>/dev/null || echo 'UNKNOWN')"
+    echo "Aborting to avoid changing networking/systemd settings on a non-Pi host."
+    exit 2
+  fi
+  echo "OK: Raspberry Pi detected: $(tr -d '\0' </proc/device-tree/model)"
+}
+
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 backup_if_exists() {
@@ -60,16 +150,27 @@ backup_if_exists() {
 
 cat_as_root() { tee "$1" >/dev/null; chmod "${2:-0644}" "$1"; }
 
-# Versioning for development debugging. Comment out for production.
-backup_if_exists ~/setup-ip.sh
+need_root
+pi_guard
+#teardown_previous_install
+
+mkdir -p "/var/lib/${APP_NAME}"
+id "${APP_USER}" >/dev/null 2>&1 || { echo "ERROR: user ${APP_USER} does not exist"; exit 4; }
+chown "${APP_USER}:${APP_USER}" "/var/lib/${APP_NAME}"
 
 echo "==> 1) Base packages / updates"
 export DEBIAN_FRONTEND=noninteractive
 
-PKGS=(
-  ca-certificates curl wget git nano htop lsof net-tools
-  iproute2 iputils-ping tcpdump glances
-  network-manager rfkill wireless-tools iw
+PKGS_MINIMAL=(
+  ca-certificates curl
+  iproute2 iputils-ping
+  network-manager
+)
+
+PKGS_OPS=(
+  wget git nano htop lsof net-tools
+  tcpdump glances
+  rfkill wireless-tools iw
   systemd-timesyncd unzip xz-utils
   bind9-dnsutils jq iftop iotop tmux vim
 )
@@ -77,11 +178,13 @@ PKGS=(
 apt-get update -y
 apt-get upgrade -y
 
-if [[ "$INSTALL_TOOLS" == "1" ]]; then
-   apt-get install -y "${PKGS[@]}"
+apt-get install -y "${PKGS_MINIMAL[@]}"
+
+if [[ "${INSTALL_TOOLS}" == "1" ]]; then
+  apt-get install -y "${PKGS_OPS[@]}"
 fi
 
-echo "==> 1.5) Create mhddos.ini in user home directory"
+echo "==> 2) Create mhddos.ini in user home directory"
 
 INI_PATH="/home/${SUDO_USER:-${USER}}/mhddos.ini"
 
@@ -110,13 +213,46 @@ EOF
 
 chown "${SUDO_USER:-${USER}}":"${SUDO_USER:-${USER}}" "${INI_PATH}"
 chmod 0644 "${INI_PATH}"
+mkdir -p /opt/itarmy/bin
 cp "/home/${SUDO_USER:-${USER}}/mhddos.ini" /opt/itarmy/bin/
 
 
-echo "==> 2) Ensure NetworkManager is enabled (Debian headless sometimes varies)"
+
+echo "==> 3) Create environment file for ${APP_NAME}"
+echo
+echo "cat <<EOF | cat_as_root ${APP_ENV_FILE} 0644"
+
+cat <<EOF | cat_as_root "${APP_ENV_FILE}" 0644
+# Environment for ${APP_NAME}.service
+# Put the real long-running command here.
+# Example:
+# WORKER_CMD="/opt/itarmy/bin/mhddos_proxy_linux"
+WORKER_CMD="${ITARMY_BIN}"
+EOF
+
+echo "==> 4) Create worker wrapper (${START_SCRIPT})"
+backup_if_exists "${APP_EXECSTART}"
+
+cat <<'EOF' | cat_as_root "${APP_EXECSTART}" 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+ENV_FILE="/etc/default/mhddos_proxy_linux"
+if [[ -r "${ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+fi
+
+: "${WORKER_CMD:?WORKER_CMD is not set. Set WORKER_CMD in ${ENV_FILE}}"
+
+echo "Starting: ${WORKER_CMD}" | systemd-cat -t mhddos_proxy_linux
+exec "${WORKER_CMD}"
+EOF
+
+echo "==> 5) Ensure NetworkManager is enabled (Debian headless sometimes varies)"
 systemctl enable --now NetworkManager
 
-echo "==> 3) Disable Wi-Fi power saving via NetworkManager (prevents brcmfmac weirdness)"
+echo "==> 6) Disable Wi-Fi power saving via NetworkManager (prevents brcmfmac weirdness)"
 mkdir -p /etc/NetworkManager/conf.d
 backup_if_exists /etc/NetworkManager/conf.d/10-wifi-powersave.conf
 cat <<'EOF' | cat_as_root /etc/NetworkManager/conf.d/10-wifi-powersave.conf 0644
@@ -124,21 +260,24 @@ cat <<'EOF' | cat_as_root /etc/NetworkManager/conf.d/10-wifi-powersave.conf 0644
 wifi.powersave = 2
 EOF
 
-echo "==> 4) Make journald persistent + cap disk usage (prevents runaway logs on flapping links)"
+echo "==> 7) Make journald persistent + cap disk usage (prevents runaway logs on flapping links)"
 mkdir -p /etc/systemd/journald.conf.d
+
 tee /etc/systemd/journald.conf.d/50-force-persistent.conf >/dev/null <<EOF
 [Journal]
 Storage=persistent
 SystemMaxUse=${JOURNAL_MAX}
 SystemMaxFileSize=${JOURNAL_MAX_FILE}
-MaxRetentionSec=7day
+#MaxRetentionSec=7day
 Compress=yes
+RateLimitIntervalSec=30s
+RateLimitBurst=2000
 EOF
 
 mkdir -p /var/log/journal
 systemctl restart systemd-journald
 
-echo "==> 5) Install congestion-aware network watchdog (no reconnect churn on upstream blips)"
+echo "==> 8) Install congestion-aware network watchdog (no reconnect churn on upstream blips)"
 backup_if_exists /usr/local/bin/net-watchdog.sh
 
 cat <<'EOF' | cat_as_root /usr/local/bin/net-watchdog.sh 0755
@@ -290,7 +429,7 @@ main "$@"
 EOF
 
 
-echo "==> 6) systemd unit + timer for watchdog"
+echo "==> 9) systemd unit + timer for watchdog"
 mkdir -p /etc/systemd/system
 
 backup_if_exists /etc/systemd/system/net-watchdog.service
@@ -324,7 +463,7 @@ Unit=net-watchdog.service
 WantedBy=timers.target
 EOF
 
-echo "==> 7) Apply changes"
+echo "==> 10) Apply changes"
 systemctl daemon-reload
 systemctl restart systemd-journald
 # Restart NM so the powersave setting takes effect
@@ -334,7 +473,7 @@ sleep 5
 systemctl enable --now net-watchdog.timer
 systemctl start net-watchdog.service
 
-echo "==> 8) Quick status snapshot"
+echo "==> 11) Quick status snapshot"
 echo "---- nmcli dev status ----"
 nmcli -f DEVICE,TYPE,STATE,CONNECTION dev status || true
 systemctl list-timers --all | grep -F net-watchdog || true
@@ -352,7 +491,7 @@ echo
 echo "DONE."
 echo "Tip: watch live with: journalctl -f -t net-watchdog -u NetworkManager"
 
-echo "==> 9) Install hardened service framework (/usr/local/lib/service-hardened.sh)"
+echo "==> 12) Install hardened service framework (/usr/local/lib/service-hardened.sh)"
 mkdir -p /usr/local/lib /usr/local/bin
 backup_if_exists /usr/local/lib/service-hardened.sh
 
@@ -388,9 +527,9 @@ need_root() {
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 DEFAULT_NICE="${DEFAULT_NICE:-5}"
-DEFAULT_CPU_QUOTA="${DEFAULT_CPU_QUOTA:-30%}"
-DEFAULT_MEM_MAX="${DEFAULT_MEM_MAX:-256M}"
-DEFAULT_RESTART_SEC="${DEFAULT_RESTART_SEC:-10}"
+DEFAULT_CPU_QUOTA="${DEFAULT_CPU_QUOTA:-85%}"
+DEFAULT_MEM_MAX="${DEFAULT_MEM_MAX:-1.2G}"
+DEFAULT_RESTART_SEC="${DEFAULT_RESTART_SEC:-15}"
 DEFAULT_TIMEOUT_START="${DEFAULT_TIMEOUT_START:-20}"
 
 install_hardened_service() {
@@ -398,7 +537,7 @@ install_hardened_service() {
   local execstart="${2:?ExecStart required}"
 
   local run_as="${RUN_AS:-root}"
-  local workdir="${WORKDIR:-/}"
+  local workdir="${WORKDIR:-/var/lib/${app}}"
   local env_file="${ENV_FILE:-}"
   local cpu_quota="${CPU_QUOTA:-$DEFAULT_CPU_QUOTA}"
   local mem_max="${MEM_MAX:-$DEFAULT_MEM_MAX}"
@@ -422,9 +561,10 @@ install_hardened_service() {
     echo "User=${run_as}"
     echo "StateDirectory=${app}"
     echo "StateDirectoryMode=0755"
-    echo "WorkingDirectory=/var/lib/${app}"
+    echo "RuntimeDirectory=${app}"
+    echo "RuntimeDirectoryMode=0755"
+    echo "WorkingDirectory=${workdir}"
     [[ -n "$env_file" ]] && echo "EnvironmentFile=${env_file}"
-    echo "ExecStartPre=/usr/bin/test -x /bin/bash"
     echo "ExecStart=${execstart}"
     echo "Restart=on-failure"
     echo "RestartSec=${restart_sec}"
@@ -440,7 +580,7 @@ install_hardened_service() {
     echo "NoNewPrivileges=yes"
     echo "PrivateTmp=yes"
     echo "ProtectSystem=strict"
-    echo "ProtectHome=true"
+    echo "ProtectHome=read only"
     echo "ProtectKernelTunables=yes"
     echo "ProtectKernelModules=yes"
     echo "ProtectControlGroups=yes"
@@ -676,7 +816,7 @@ install_reachability_reboot_watchdog() {
   systemctl enable --now "${name}.timer"
 }
 
-nable_linger_for_user() {
+enable_linger_for_user() {
   local user="${1:?username required}"
   if have_cmd loginctl; then
     loginctl enable-linger "$user"
@@ -715,16 +855,16 @@ EOF
 
 ln -sf /usr/local/lib/service-hardened.sh /usr/local/bin/service-hardened.sh
 
-echo "==> 10) Enable kernel watchdog stack (firmware + watchdog daemon + config)"
+echo "==> 13) Enable kernel watchdog stack (firmware + watchdog daemon + config)"
 WATCHDOG_DEVICE="${WATCHDOG_DEVICE:-/dev/watchdog}" WATCHDOG_TIMEOUT="${WATCHDOG_TIMEOUT:-15}" \
   /usr/local/bin/service-hardened.sh enable-watchdog
 
-echo "==> 11) Install network reachability reboot watchdog (timer-based)"
+echo "==> 14) Install network reachability reboot watchdog (timer-based)"
 REACH_NAME="${REACH_NAME:-net-reach}" REACH_HOST1="${REACH_HOST1:-1.1.1.1}" REACH_HOST2="${REACH_HOST2:-8.8.8.8}" \
 REACH_FAIL_MAX="${REACH_FAIL_MAX:-12}" REACH_EVERY="${REACH_EVERY:-5m}" \
   /usr/local/bin/service-hardened.sh install-reachability "${REACH_NAME}"
 
-# echo "==> 12) Install app package (optional .deb)"
+# echo "==> 15) Install app package (optional .deb)"
 #
 #if [[ -n "${APP_DEB_URL:-}" ]]; then
 #  tmp_deb="/tmp/$(basename "$APP_DEB_URL")"
@@ -735,59 +875,60 @@ REACH_FAIL_MAX="${REACH_FAIL_MAX:-12}" REACH_EVERY="${REACH_EVERY:-5m}" \
 #  echo "Skipping .deb install (APP_DEB_URL not set)"
 #fi
 
-echo "==> 13) Create worker wrapper (${START_SCRIPT})"
-cat <<'EOF' | cat_as_root "/usr/local/bin/${START_SCRIPT}" 0755
-#!/usr/bin/env bash
-set -euo pipefail
+echo "==> 16) Install ADSS (download installer, then run it)"
+# curl -sL https://raw.githubusercontent.com/it-army-ua-scripts/ADSS/install/install.sh  | bash -s
+echo "Files in ${ITARMY_INSTALLER_PATH}."
+echo
+ls -la "${ITARMY_INSTALLER_PATH}"
+echo
+#rm -f "${ITARMY_INSTALLER_PATH}"
+echo "Installing from ${ITARMY_INSTALL_URL}"
+curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s
 
-# Worker wrapper script created by setup-pi.sh
-# Purpose: provide a stable ExecStart target for the hardened systemd service.
-# Replace WORKER_CMD with your legitimate long-running workload command.
+echo "==> 16.1) Verify expected binary exists"
+if [[ ! -x "${ITARMY_BIN}" ]]; then
+  echo "ERROR: Expected binary not found or not executable: ${ITARMY_BIN}"
+  echo "Contents of ${ITARMY_INSTALLER_PATH}:"
+  ls -la "${ITARMY_INSTALLER_PATH}" || true
+  exit 3
+fi
+echo "OK: Found executable: ${ITARMY_BIN}"
 
-WORKER_CMD="${WORKER_CMD:-~/opt/itarmy/bin/${START_SCRIPT}"
+# Ensure WorkingDirectory matches where the real binary lives
+APP_WORKDIR="$(dirname "${ITARMY_BIN}")"
+if [[ ! -d "${APP_WORKDIR}" ]]; then
+  echo "ERROR: APP_WORKDIR is not a directory: ${APP_WORKDIR}"
+  exit 3
+fi
+echo "OK: APP_WORKDIR=${APP_WORKDIR}"
 
-exec ${WORKER_CMD}
-EOF
 
-
-echo "==> 14) Install hardened app service (${APP_NAME})"
+echo "==> 17) Install hardened app service (${APP_NAME})"
 if [[ "${INSTALL_HARDENED_APP:-0}" == "1" ]]; then
   if [[ -z "${APP_NAME:-}" || -z "${APP_EXECSTART:-}" ]]; then
     echo "ERROR: INSTALL_HARDENED_APP=1 but APP_NAME or APP_EXECSTART is empty."
     exit 1
   fi
-  RUN_AS="${APP_USER:-root}" WORKDIR="${APP_WORKDIR:-/}" \
-  CPU_QUOTA="${APP_CPU_QUOTA:-30%}" MEM_MAX="${APP_MEM_MAX:-256M}" NICE="${APP_NICE:-5}" \
-    /usr/local/bin/service-hardened.sh install-service "${APP_NAME}" "${APP_EXECSTART}"
+    RUN_AS="${APP_USER:-root}" WORKDIR="${APP_WORKDIR}" ENV_FILE="${APP_ENV_FILE}" \
+    CPU_QUOTA="${APP_CPU_QUOTA:-30%}" MEM_MAX="${APP_MEM_MAX:-256M}" NICE="${APP_NICE:-5}" \
+      /usr/local/bin/service-hardened.sh install-service "${APP_NAME}" "${APP_EXECSTART}"
 else
   echo "Skipping hardened app service (INSTALL_HARDENED_APP=0)"
 fi
 
-echo "==> 15) Deadman restart ${APP_NAME} if inactive every 6 hours (timer)"
+echo "==> 18) Deadman restart ${APP_NAME} if inactive every 6 hours (timer)"
 if [[ "${INSTALL_HARDENED_APP:-0}" == "1" ]]; then
   RESTART_EVERY="${APP_DEADMAN_EVERY:-6h}" \
     /usr/local/bin/service-hardened.sh install-restart-timer "${APP_NAME}"
 fi
 
-echo "==> 16) Heartbeat log for ${APP_NAME} every 5 minutes (timer)"
+echo "==> 19) Heartbeat log for ${APP_NAME} every 5 minutes (timer)"
 if [[ "${INSTALL_HARDENED_APP:-0}" == "1" ]]; then
   HEARTBEAT_EVERY="${APP_HEARTBEAT_EVERY:-5m}" \
     /usr/local/bin/service-hardened.sh install-heartbeat "${APP_NAME}"
 fi
 
-echo "==> 17) Restart ${APP_NAME} service now that ${START_SCRIPT} exists"
-systemctl daemon-reload
-systemctl restart "${APP_NAME}.service" || true
-systemctl status "${APP_NAME}.service" --no-pager || true
-
-echo "==> 18) Install ADSS (download installer, then run it)"
-# curl -sL https://raw.githubusercontent.com/it-army-ua-scripts/ADSS/install/install.sh  | bash -s
-echo "Files in ${ITARMY_INSTALLER_PATH}."
-echo
-ls -la ${ITARMY_INSTALLER_PATH}
-echo
-#rm -f "${ITARMY_INSTALLER_PATH}"
-echo "Installing from ${ITARMY_INSTALL_URL}"
-curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s
-chmod 0755 "${ITARMY_INSTALLER_PATH}${APP_NAME}"
-"${ITARMY_INSTALLER_PATH}${APP_NAME}"
+echo "==> 20) Verify ${APP_NAME} service is enabled and running"
+systemctl is-enabled "${APP_NAME}.service" --quiet && echo "OK: enabled" || echo "WARN: not enabled"
+systemctl is-active  "${APP_NAME}.service" --quiet && echo "OK: active"  || echo "WARN: not active"
+journalctl -u "${APP_NAME}.service" -n 50 --no-pager || true
