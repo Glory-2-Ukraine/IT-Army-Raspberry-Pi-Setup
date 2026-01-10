@@ -654,9 +654,6 @@ need_root() {
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-DEFAULT_NICE="${DEFAULT_NICE:-19}"
-DEFAULT_CPU_QUOTA="${DEFAULT_CPU_QUOTA:-20%}"
-DEFAULT_MEM_MAX="${DEFAULT_MEM_MAX:-160M}"
 DEFAULT_RESTART_SEC="${DEFAULT_RESTART_SEC:-15}"
 DEFAULT_TIMEOUT_START="${DEFAULT_TIMEOUT_START:-20}"
 
@@ -667,9 +664,13 @@ install_hardened_service() {
   local run_as="${RUN_AS:-root}"
   local workdir="${WORKDIR:-/var/lib/${app}}"
   local env_file="${ENV_FILE:-}"
-  local cpu_quota="${CPU_QUOTA:-$DEFAULT_CPU_QUOTA}"
-  local mem_max="${MEM_MAX:-$DEFAULT_MEM_MAX}"
-  local nice="${NICE:-$DEFAULT_NICE}"
+  : "${CPU_QUOTA:?CPU_QUOTA is required (set in setup-pi.sh tunables)}"
+  : "${MEM_MAX:?MEM_MAX is required (set in setup-pi.sh tunables)}"
+  : "${NICE:?NICE is required (set in setup-pi.sh tunables)}"
+
+  local cpu_quota="${CPU_QUOTA}"
+  local mem_max="${MEM_MAX}"
+  local nice="${NICE}"
   local restart_sec="${RESTART_SEC:-$DEFAULT_RESTART_SEC}"
   local timeout_start="${TIMEOUT_START:-$DEFAULT_TIMEOUT_START}"
 
