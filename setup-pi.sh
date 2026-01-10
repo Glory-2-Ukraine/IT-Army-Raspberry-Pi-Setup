@@ -48,15 +48,15 @@ teardown_previous_install() {
   
   # 7) Remove env file (optional). Keeping it is usually fine, but stale values can bite you.
   if [[ "${WIPE_ENV:-0}" == "1" ]]; then
-    echo "WIPE_ENV=1 set; deleting /etc/default/mhddos_proxy_linux"
+    echo "WIPE_ENV=1 set; deleting /etc//mhddos_proxy_linux"
     sudo rm -f /etc/default/mhddos_proxy_linux
   else
-    echo "Keeping env file /etc/default/mhddos_proxy_linux (WIPE_ENV=0)"
+    echo "Keeping env file /etc//mhddos_proxy_linux (WIPE_ENV=0)"
   fi
 
   # 8) Remove state/log/runtime directories if YOU created them and it’s safe to wipe
   # (StateDirectory=mhddos_proxy_linux => /var/lib/mhddos_proxy_linux)
-  # Keep state by default (often includes useful history).
+  # Keep state by  (often includes useful history).
   # If you want a true clean wipe, run with WIPE_STATE=1
   if [[ "${WIPE_STATE:-0}" == "1" ]]; then
     echo "WIPE_STATE=1 set; deleting /var/lib/mhddos_proxy_linux"
@@ -84,7 +84,7 @@ APP_USER="pi"
 
 START_SCRIPT="${APP_NAME}-worker.sh"
 APP_EXECSTART="/usr/local/bin/${START_SCRIPT}"
-APP_ENV_FILE="/etc/default/${APP_NAME}"
+APP_ENV_FILE="/etc//${APP_NAME}"
 
 APP_WORKDIR=""
 
@@ -101,7 +101,7 @@ JOURNAL_MAX="${JOURNAL_MAX:-200M}"     # journald disk cap
 JOURNAL_MAX_FILE="${JOURNAL_MAX_FILE:-20M}"
 INSTALL_TOOLS="${INSTALL_TOOLS:-1}"   # 1=yes, 0=no
 GW_MISS_MAX="${GW_MISS_MAX:-3}"
-# ---- Reachability reboot watchdog defaults (Step 11) ----
+# ---- Reachability reboot watchdog s (Step 11) ----
 REACH_NAME="${REACH_NAME:-net-reach}"
 REACH_HOST1="${REACH_HOST1:-1.1.1.1}"
 REACH_HOST2="${REACH_HOST2:-8.8.8.8}"
@@ -259,7 +259,7 @@ cat <<'EOF' | cat_as_root "${APP_EXECSTART}" 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_FILE="/etc/default/mhddos_proxy_linux"
+ENV_FILE="/etc//mhddos_proxy_linux"
 if [[ -r "${ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
@@ -330,7 +330,7 @@ COOLDOWN_S="${COOLDOWN_S:-180}"
 STATE_DIR="/run/net-watchdog"
 LAST_RECONNECT_FILE="${STATE_DIR}/last_reconnect_epoch"
 
-# GW miss tracking (avoid reconnect on a single transient “no default route”)
+# GW miss tracking (avoid reconnect on a single transient “no  route”)
 GW_MISS_FILE="${STATE_DIR}/gw_miss_count"
 GW_MISS_MAX="${GW_MISS_MAX:-3}"
 
@@ -338,7 +338,7 @@ log() { logger -t "$TAG" "$*"; }
 ts() { date -Is; }
 
 get_gw() {
-  ip -4 route show default dev "$IFACE" 2>/dev/null | awk '{print $3; exit}' || true
+  ip -4 route show  dev "$IFACE" 2>/dev/null | awk '{print $3; exit}' || true
 }
 
 neigh_state() {
@@ -418,7 +418,7 @@ main() {
   if [[ -z "${gw}" ]]; then
     local misses
     misses="$(inc_gw_miss)"
-    log "$(ts) WARN: no default gateway on ${IFACE} (miss ${misses}/${GW_MISS_MAX})."
+    log "$(ts) WARN: no  gateway on ${IFACE} (miss ${misses}/${GW_MISS_MAX})."
 
     if (( misses >= GW_MISS_MAX )); then
       if ! tcp_check 1.1.1.1 443 2 && ! tcp_check 8.8.8.8 443 2; then
@@ -515,16 +515,14 @@ systemctl start net-watchdog.service
 echo "==> 10.4) Ensure ifb0 exists at boot (systemd oneshot)"
 cat >/etc/systemd/system/ifb0-setup.service <<'EOF'
 [Unit]
-Description=Create ifb0 for ingress shaping
+Description=Create ifb0 for ingress shaping (idempotent)
 After=systemd-modules-load.service
 Before=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/sbin/modprobe ifb
-ExecStart=/sbin/ip link add ifb0 type ifb
-ExecStart=/sbin/ip link set ifb0 up
+ExecStart=/bin/sh -c 'modprobe ifb; ip link show ifb0 >/dev/null 2>&1 || ip link add ifb0 type ifb; ip link set ifb0 up'
 RemainAfterExit=yes
 
 [Install]
@@ -534,71 +532,81 @@ EOF
 systemctl daemon-reload
 systemctl enable --now ifb0-setup.service
 
-echo "==> 10.5) Deprioritize mhddos network traffic (tc, egress + ingress)"
+echo "==> 10.5) Install tc QoS script (persisted via systemd)"
+
+cat <<'EOF' | cat_as_root /usr/local/sbin/tc-ssh-qos.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
 
 IFACE="${IFACE:-wlan0}"
+LAN_SSH_CLIENT="${LAN_SSH_CLIENT:-192.168.1.113}"
 
-# --- prerequisites for ingress shaping ---
-modprobe ifb 2>/dev/null || true
-ip link add ifb0 type ifb 2>/dev/null || true
-ip link set ifb0 up 2>/dev/null || true
+modprobe ifb >/dev/null 2>&1 || true
+ip link show ifb0 >/dev/null 2>&1 || ip link add ifb0 type ifb
+ip link set ifb0 up
 
-# --- clear any existing shaping (safe if none exists) ---
-tc qdisc del dev "${IFACE}" root 2>/dev/null || true
-tc qdisc del dev "${IFACE}" ingress 2>/dev/null || true
+tc qdisc del dev "$IFACE" root 2>/dev/null || true
+tc qdisc del dev "$IFACE" ingress 2>/dev/null || true
 tc qdisc del dev ifb0 root 2>/dev/null || true
 
-# --- EGRESS (upload) shaping on ${IFACE} ---
-tc qdisc add dev "${IFACE}" root handle 1: htb default 30 2>/dev/null || true
+tc qdisc add dev "$IFACE" root handle 1: htb default 30
+tc class add dev "$IFACE" parent 1: classid 1:10 htb rate 5mbit ceil 20mbit prio 0
+tc qdisc add dev "$IFACE" parent 1:10 handle 110: fq_codel
+tc class add dev "$IFACE" parent 1: classid 1:20 htb rate 256kbit ceil 2mbit prio 7
+tc qdisc add dev "$IFACE" parent 1:20 handle 120: fq_codel
+tc class add dev "$IFACE" parent 1: classid 1:30 htb rate 2mbit ceil 20mbit prio 3
+tc qdisc add dev "$IFACE" parent 1:30 handle 130: fq_codel
 
-# High-priority class for SSH/control traffic
-tc class add dev "${IFACE}" parent 1: classid 1:10 htb rate 5mbit ceil 20mbit prio 0
-tc qdisc add dev "${IFACE}" parent 1:10 handle 110: fq_codel
+# SSH: LAN-only (do NOT match global port 22)
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 \
+  match ip src ${LAN_SSH_CLIENT}/32 match ip dport 22 0xffff flowid 1:10
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 \
+  match ip dst ${LAN_SSH_CLIENT}/32 match ip sport 22 0xffff flowid 1:10
 
-# Low-priority class for mhddos (marked)
-tc class add dev "${IFACE}" parent 1: classid 1:20 htb rate 256kbit ceil 2mbit prio 7
-tc qdisc add dev "${IFACE}" parent 1:20 handle 120: fq_codel
+# Deprioritize fwmark 1
+tc filter add dev "$IFACE" protocol ip parent 1: prio 2 handle 1 fw flowid 1:20
 
-# Default class for everything else
-tc class add dev "${IFACE}" parent 1: classid 1:30 htb rate 2mbit ceil 20mbit prio 3
-tc qdisc add dev "${IFACE}" parent 1:30 handle 130: fq_codel
+tc qdisc add dev "$IFACE" handle ffff: ingress
+tc filter add dev "$IFACE" parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0
 
-# SSH: match BOTH directions on egress (client dport 22, server sport 22)
-tc filter add dev "${IFACE}" protocol ip parent 1: prio 1 u32 \
-  match ip dport 22 0xffff flowid 1:10
-tc filter add dev "${IFACE}" protocol ip parent 1: prio 1 u32 \
-  match ip sport 22 0xffff flowid 1:10
-
-# mhddos: traffic marked via fwmark=1
-tc filter add dev "${IFACE}" protocol ip parent 1: prio 2 handle 1 fw flowid 1:20
-
-# --- INGRESS (download) shaping via ifb0 ---
-# Redirect ingress on ${IFACE} into ifb0
-tc qdisc add dev "${IFACE}" handle ffff: ingress
-tc filter add dev "${IFACE}" parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0
-
-# Shape redirected ingress on ifb0
 tc qdisc add dev ifb0 root handle 2: htb default 30
-
 tc class add dev ifb0 parent 2: classid 2:10 htb rate 5mbit ceil 20mbit prio 0
 tc qdisc add dev ifb0 parent 2:10 handle 210: fq_codel
-
 tc class add dev ifb0 parent 2: classid 2:20 htb rate 256kbit ceil 2mbit prio 7
 tc qdisc add dev ifb0 parent 2:20 handle 220: fq_codel
-
 tc class add dev ifb0 parent 2: classid 2:30 htb rate 2mbit ceil 20mbit prio 3
 tc qdisc add dev ifb0 parent 2:30 handle 230: fq_codel
 
-# SSH on ingress path: still classify SSH packets to/from port 22
 tc filter add dev ifb0 protocol ip parent 2: prio 1 u32 \
-  match ip dport 22 0xffff flowid 2:10
+  match ip src ${LAN_SSH_CLIENT}/32 match ip dport 22 0xffff flowid 2:10
 tc filter add dev ifb0 protocol ip parent 2: prio 1 u32 \
-  match ip sport 22 0xffff flowid 2:10
+  match ip dst ${LAN_SSH_CLIENT}/32 match ip sport 22 0xffff flowid 2:10
 
-# Marked mhddos packets (if marked locally, responses still hit egress; this helps where marks appear)
-tc filter add dev ifb0 protocol ip parent 2: prio 2 handle 1 fw flowid 2:20
+tc filter add dev ifb0 protocol ip parent 2: prio 2 handle 1 fw flowid 2:20 || true
+EOF
 
-echo "tc rules installed on ${IFACE} (egress) and ifb0 (ingress)"
+echo "==> 10.6) systemd unit to apply tc QoS after network-online"
+
+cat <<EOF | cat_as_root /etc/systemd/system/tc-ssh-qos.service 0644
+[Unit]
+Description=Apply tc QoS for LAN SSH
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=IFACE=${IFACE}
+Environment=LAN_SSH_CLIENT=192.168.1.113
+ExecStart=/usr/local/sbin/tc-ssh-qos.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now tc-ssh-qos.service
+
 
 
 echo "==> 11) Quick status snapshot"
@@ -654,8 +662,8 @@ need_root() {
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-DEFAULT_RESTART_SEC="${DEFAULT_RESTART_SEC:-15}"
-DEFAULT_TIMEOUT_START="${DEFAULT_TIMEOUT_START:-20}"
+DEFAULT_RESTART_SEC="${_RESTART_SEC:-15}"
+DEFAULT_TIMEOUT_START="${_TIMEOUT_START:-20}"
 
 install_hardened_service() {
   local app="${1:?APP_NAME required}"
@@ -671,8 +679,8 @@ install_hardened_service() {
   local cpu_quota="${CPU_QUOTA}"
   local mem_max="${MEM_MAX}"
   local nice="${NICE}"
-  local restart_sec="${RESTART_SEC:-$DEFAULT_RESTART_SEC}"
-  local timeout_start="${TIMEOUT_START:-$DEFAULT_TIMEOUT_START}"
+  local restart_sec="${RESTART_SEC:-$_RESTART_SEC}"
+  local timeout_start="${TIMEOUT_START:-$_TIMEOUT_START}"
 
   local unit="/etc/systemd/system/${app}.service"
   backup_if_exists "$unit"
@@ -710,7 +718,7 @@ install_hardened_service() {
     echo "IOAccounting=yes"
     echo "IOWeight=1"
     echo
-    echo "# Safer defaults"
+    echo "# Safer s"
     echo "NoNewPrivileges=yes"
     echo "PrivateTmp=yes"
     echo "ProtectSystem=strict"
