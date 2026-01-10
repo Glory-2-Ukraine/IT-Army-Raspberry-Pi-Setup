@@ -15,11 +15,13 @@
 #   mhddos    -> FOOBAR
 #   itarmy -> STATEONE
 #   ITARMY -> GOLDENONE
+#   ADSS   -> SSDA
 #
 # dirty/run (same):
 #   FOOBAR    -> mhddos
 #   STATEONE  -> itarmy
 #   GOLDENONE -> ITARMY
+#   SSDA      -> ADSS
 #
 # Creates a timestamped backup before modifying.
 
@@ -53,18 +55,22 @@ if [[ "$MODE" == "clean" ]]; then
     -e 's/ITARMY/__PH_ITARMY__/g' \
     -e 's/itarmy/__PH_itarmy__/g' \
     -e 's/mhddos/__PH_mhddos__/g' \
+    -e 's/ADSS/__PH_SSDA__/g' \
     -e 's/__PH_ITARMY__/GOLDENONE/g' \
     -e 's/__PH_itarmy__/STATEONE/g' \
     -e 's/__PH_mhddos__/FOOBAR/g' \
+    -e 's/__PH_ADSS__/SSDA/g' \
     "$TARGET"
 else
   sed -i \
     -e 's/GOLDENONE/__PH_GOLDEN__/g' \
     -e 's/STATEONE/__PH_STATE__/g' \
     -e 's/FOOBAR/__PH_FOOBAR__/g' \
+    -e 's/SSDA/__PH_ADSS__/g' \
     -e 's/__PH_GOLDEN__/ITARMY/g' \
     -e 's/__PH_STATE__/itarmy/g' \
     -e 's/__PH_FOOBAR__/mhddos/g' \
+    -e 's/__PH_SSDA__/ADSS/g' \
     "$TARGET"
 fi
 
