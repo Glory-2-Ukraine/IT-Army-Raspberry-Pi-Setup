@@ -184,6 +184,28 @@ if [[ "${INSTALL_TOOLS}" == "1" ]]; then
   apt-get install -y "${PKGS_OPS[@]}"
 fi
 
+echo "==> 1.5) SSH service priority (systemd drop-in)"
+mkdir -p /etc/systemd/system/ssh.service.d /etc/systemd/system/sshd.service.d
+
+cat >/etc/systemd/system/ssh.service.d/10-priority.conf <<'EOF'
+[Service]
+CPUWeight=1000
+IOWeight=1000
+Nice=-5
+EOF
+
+cat >/etc/systemd/system/sshd.service.d/10-priority.conf <<'EOF'
+[Service]
+CPUWeight=1000
+IOWeight=1000
+Nice=-5
+EOF
+
+systemctl daemon-reload
+systemctl try-restart ssh.service 2>/dev/null || true
+systemctl try-restart sshd.service 2>/dev/null || true
+
+
 echo "==> 2) Create FOOBAR.ini in user home directory"
 
 INI_PATH="/home/${SUDO_USER:-${USER}}/FOOBAR.ini"
@@ -487,30 +509,71 @@ sleep 5
 systemctl enable --now net-watchdog.timer
 systemctl start net-watchdog.service
 
-echo "==> 10.5) Deprioritize FOOBAR network traffic (tc)"
+echo "==> 10.5) Deprioritize FOOBAR network traffic (tc, egress + ingress)"
 
 IFACE="${IFACE:-wlan0}"
 
-# Clean any existing qdisc (safe if none exists)
+# --- prerequisites for ingress shaping ---
+modprobe ifb 2>/dev/null || true
+ip link add ifb0 type ifb 2>/dev/null || true
+ip link set ifb0 up 2>/dev/null || true
+
+# --- clear any existing shaping (safe if none exists) ---
 tc qdisc del dev "${IFACE}" root 2>/dev/null || true
+tc qdisc del dev "${IFACE}" ingress 2>/dev/null || true
+tc qdisc del dev ifb0 root 2>/dev/null || true
 
-# Root qdisc
-tc qdisc add dev "${IFACE}" root handle 1: htb default 20
+# --- EGREE (upload) shaping on ${IFACE} ---
+tc qdisc add dev "${IFACE}" root handle 1: htb default 30
 
-# High-priority class (SSH, admin traffic)
-tc class add dev "${IFACE}" parent 1: classid 1:10 htb rate 100mbit ceil 100mbit prio 0
+# High-priority class for SSH/control traffic
+tc class add dev "${IFACE}" parent 1: classid 1:10 htb rate 5mbit ceil 20mbit prio 0
+tc qdisc add dev "${IFACE}" parent 1:10 handle 110: fq_codel
 
-# Low-priority class (FOOBAR)
-tc class add dev "${IFACE}" parent 1: classid 1:20 htb rate 1mbit ceil 5mbit prio 7
+# Low-priority class for FOOBAR (marked)
+tc class add dev "${IFACE}" parent 1: classid 1:20 htb rate 256kbit ceil 2mbit prio 7
+tc qdisc add dev "${IFACE}" parent 1:20 handle 120: fq_codel
 
-# SSH always wins
-tc filter add dev "${IFACE}" protocol ip parent 1: prio 0 u32 \
+# Default class for everything else
+tc class add dev "${IFACE}" parent 1: classid 1:30 htb rate 2mbit ceil 20mbit prio 3
+tc qdisc add dev "${IFACE}" parent 1:30 handle 130: fq_codel
+
+# SSH: match BOTH directions on egress (client dport 22, server sport 22)
+tc filter add dev "${IFACE}" protocol ip parent 1: prio 1 u32 \
   match ip dport 22 0xffff flowid 1:10
+tc filter add dev "${IFACE}" protocol ip parent 1: prio 1 u32 \
+  match ip sport 22 0xffff flowid 1:10
 
-# FOOBAR traffic marked via fwmark
-tc filter add dev "${IFACE}" protocol ip parent 1: prio 1 handle 1 fw flowid 1:20
+# FOOBAR: traffic marked via fwmark=1
+tc filter add dev "${IFACE}" protocol ip parent 1: prio 2 handle 1 fw flowid 1:20
 
-echo "tc rules installed on ${IFACE}"
+# --- INGRESS (download) shaping via ifb0 ---
+# Redirect ingress on ${IFACE} into ifb0
+tc qdisc add dev "${IFACE}" handle ffff: ingress
+tc filter add dev "${IFACE}" parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0
+
+# Shape redirected ingress on ifb0
+tc qdisc add dev ifb0 root handle 2: htb default 30
+
+tc class add dev ifb0 parent 2: classid 2:10 htb rate 5mbit ceil 20mbit prio 0
+tc qdisc add dev ifb0 parent 2:10 handle 210: fq_codel
+
+tc class add dev ifb0 parent 2: classid 2:20 htb rate 256kbit ceil 2mbit prio 7
+tc qdisc add dev ifb0 parent 2:20 handle 220: fq_codel
+
+tc class add dev ifb0 parent 2: classid 2:30 htb rate 2mbit ceil 20mbit prio 3
+tc qdisc add dev ifb0 parent 2:30 handle 230: fq_codel
+
+# SSH on ingress path: still classify SSH packets to/from port 22
+tc filter add dev ifb0 protocol ip parent 2: prio 1 u32 \
+  match ip dport 22 0xffff flowid 2:10
+tc filter add dev ifb0 protocol ip parent 2: prio 1 u32 \
+  match ip sport 22 0xffff flowid 2:10
+
+# Marked FOOBAR packets (if marked locally, responses still hit egress; this helps where marks appear)
+tc filter add dev ifb0 protocol ip parent 2: prio 2 handle 1 fw flowid 2:20
+
+echo "tc rules installed on ${IFACE} (egress) and ifb0 (ingress)"
 
 
 echo "==> 11) Quick status snapshot"
@@ -615,11 +678,11 @@ install_hardened_service() {
     echo "Nice=${nice}"
     echo "CPUSchedulingPolicy=idle"
     echo "CPUQuota=${cpu_quota}"
+    echo "MemoryAccounting=yes"
     echo "MemoryMax=${mem_max}"
-    echo
-    echo "IPAccounting=yes"
-    echo "IPAddressDeny=any"
-    echo "IPAddressAllow=192.168.0.0/16"
+    echo "CPUWeight=1"
+    echo "IOAccounting=yes"
+    echo "IOWeight=1"
     echo
     echo "# Safer defaults"
     echo "NoNewPrivileges=yes"
