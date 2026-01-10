@@ -5,68 +5,68 @@ teardown_previous_install() {
   echo "==> Teardown: stop/disable/remove prior units (if present)"
 
   # 1) Stop active units (won't error if not running)
-  sudo systemctl stop FOOBAR_proxy_linux.service 2>/dev/null || true
-  sudo systemctl stop FOOBAR_proxy_linux-heartbeat.timer FOOBAR_proxy_linux-restart.timer 2>/dev/null || true
-  sudo systemctl stop FOOBAR_proxy_linux-heartbeat.service FOOBAR_proxy_linux-restart.service 2>/dev/null || true
+  sudo systemctl stop mhddos_proxy_linux.service 2>/dev/null || true
+  sudo systemctl stop mhddos_proxy_linux-heartbeat.timer mhddos_proxy_linux-restart.timer 2>/dev/null || true
+  sudo systemctl stop mhddos_proxy_linux-heartbeat.service mhddos_proxy_linux-restart.service 2>/dev/null || true
   sudo systemctl stop net-watchdog.timer net-watchdog.service 2>/dev/null || true
   sudo systemctl disable net-watchdog.timer 2>/dev/null || true
   sudo rm -f /etc/systemd/system/net-watchdog.service /etc/systemd/system/net-watchdog.timer
   sudo rm -f /usr/local/bin/net-watchdog.sh
 
   sudo systemctl list-unit-files | awk '{print $1}' \
-    | grep -Ei '^FOOBAR_proxy_linux(\.|-).*(service|timer)$|^FOOBAR_proxy_linux\.service$' \
+    | grep -Ei '^mhddos_proxy_linux(\.|-).*(service|timer)$|^mhddos_proxy_linux\.service$' \
     | while read -r u; do                                                                                                                    
         sudo systemctl stop "$u" 2>/dev/null || true                                                                                         
         sudo systemctl disable "$u" 2>/dev/null || true                                                                                      
       done                                                                                                                                   
                                                                                                                                              
   # 2) Disable autostart                                                                                                                     
-  sudo systemctl disable FOOBAR_proxy_linux.service 2>/dev/null || true                                                                      
-  sudo systemctl disable FOOBAR_proxy_linux-heartbeat.timer FOOBAR_proxy_linux-restart.timer 2>/dev/null || true                             
+  sudo systemctl disable mhddos_proxy_linux.service 2>/dev/null || true                                                                      
+  sudo systemctl disable mhddos_proxy_linux-heartbeat.timer mhddos_proxy_linux-restart.timer 2>/dev/null || true                             
                                                                                                                                              
   # 3) Mask to prevent manual start while we’re removing files                                                                               
-  sudo systemctl mask FOOBAR_proxy_linux.service 2>/dev/null || true                                                                         
-  sudo systemctl mask FOOBAR_proxy_linux-heartbeat.timer FOOBAR_proxy_linux-restart.timer 2>/dev/null || true
+  sudo systemctl mask mhddos_proxy_linux.service 2>/dev/null || true                                                                         
+  sudo systemctl mask mhddos_proxy_linux-heartbeat.timer mhddos_proxy_linux-restart.timer 2>/dev/null || true
 
   # 4) Remove unit files + drop-ins (yours are in /etc/systemd/system)
-  sudo rm -f /etc/systemd/system/FOOBAR_proxy_linux.service
-  sudo rm -rf /etc/systemd/system/FOOBAR_proxy_linux.service.d
+  sudo rm -f /etc/systemd/system/mhddos_proxy_linux.service
+  sudo rm -rf /etc/systemd/system/mhddos_proxy_linux.service.d
 
-  sudo rm -f /etc/systemd/system/FOOBAR_proxy_linux-heartbeat.service
-  sudo rm -f /etc/systemd/system/FOOBAR_proxy_linux-restart.service
-  sudo rm -f /etc/systemd/system/FOOBAR_proxy_linux-heartbeat.timer
-  sudo rm -f /etc/systemd/system/FOOBAR_proxy_linux-restart.timer
+  sudo rm -f /etc/systemd/system/mhddos_proxy_linux-heartbeat.service
+  sudo rm -f /etc/systemd/system/mhddos_proxy_linux-restart.service
+  sudo rm -f /etc/systemd/system/mhddos_proxy_linux-heartbeat.timer
+  sudo rm -f /etc/systemd/system/mhddos_proxy_linux-restart.timer
 
   # 5) Reload systemd and clear fail counters
   sudo systemctl daemon-reload
   sudo systemctl reset-failed
 
   # 6) Unmask (optional) if you want future installs to be able to recreate/start cleanly
-  sudo systemctl unmask FOOBAR_proxy_linux.service 2>/dev/null || true
-  sudo systemctl unmask FOOBAR_proxy_linux-heartbeat.timer FOOBAR_proxy_linux-restart.timer 2>/dev/null || true
+  sudo systemctl unmask mhddos_proxy_linux.service 2>/dev/null || true
+  sudo systemctl unmask mhddos_proxy_linux-heartbeat.timer mhddos_proxy_linux-restart.timer 2>/dev/null || true
   sudo systemctl daemon-reload
   
   # 7) Remove env file (optional). Keeping it is usually fine, but stale values can bite you.
   if [[ "${WIPE_ENV:-0}" == "1" ]]; then
-    echo "WIPE_ENV=1 set; deleting /etc/default/FOOBAR_proxy_linux"
-    sudo rm -f /etc/default/FOOBAR_proxy_linux
+    echo "WIPE_ENV=1 set; deleting /etc/default/mhddos_proxy_linux"
+    sudo rm -f /etc/default/mhddos_proxy_linux
   else
-    echo "Keeping env file /etc/default/FOOBAR_proxy_linux (WIPE_ENV=0)"
+    echo "Keeping env file /etc/default/mhddos_proxy_linux (WIPE_ENV=0)"
   fi
 
   # 8) Remove state/log/runtime directories if YOU created them and it’s safe to wipe
-  # (StateDirectory=FOOBAR_proxy_linux => /var/lib/FOOBAR_proxy_linux)
+  # (StateDirectory=mhddos_proxy_linux => /var/lib/mhddos_proxy_linux)
   # Keep state by default (often includes useful history).
   # If you want a true clean wipe, run with WIPE_STATE=1
   if [[ "${WIPE_STATE:-0}" == "1" ]]; then
-    echo "WIPE_STATE=1 set; deleting /var/lib/FOOBAR_proxy_linux"
-    sudo rm -rf /var/lib/FOOBAR_proxy_linux
+    echo "WIPE_STATE=1 set; deleting /var/lib/mhddos_proxy_linux"
+    sudo rm -rf /var/lib/mhddos_proxy_linux
   else
-    echo "Keeping state in /var/lib/FOOBAR_proxy_linux (WIPE_STATE=0)"
+    echo "Keeping state in /var/lib/mhddos_proxy_linux (WIPE_STATE=0)"
   fi
 
   # /run is tmpfs; it resets on reboot anyway, but remove if it exists
-  sudo rm -rf /run/FOOBAR_proxy_linux
+  sudo rm -rf /run/mhddos_proxy_linux
 
   echo "==> Teardown complete"
 }
@@ -79,7 +79,7 @@ teardown_previous_install() {
 
 # ---- Tunables (edit if you want) ----
 INSTALL_HARDENED_APP=1
-APP_NAME="FOOBAR_proxy_linux"
+APP_NAME="mhddos_proxy_linux"
 APP_USER="pi"
 
 START_SCRIPT="${APP_NAME}-worker.sh"
@@ -88,12 +88,12 @@ APP_ENV_FILE="/etc/default/${APP_NAME}"
 
 APP_WORKDIR=""
 
-APP_CPU_QUOTA="85%"
-APP_MEM_MAX="1.2G"
-APP_NICE="15"
+APP_CPU_QUOTA="20%"
+APP_MEM_MAX="160M"
+APP_NICE="19"
 APP_DEADMAN_EVERY="6h"
 APP_HEARTBEAT_EVERY="5m"
-#APP_DEB_URL="${APP_DEB_URL:-https://github.com/it-army-ua-scripts/GOLDENONEkit/releases/latest/download/GOLDENONEkit-linux-arm64.deb}"
+#APP_DEB_URL="${APP_DEB_URL:-https://github.com/it-army-ua-scripts/ITARMYkit/releases/latest/download/ITARMYkit-linux-arm64.deb}"
 IFACE="${IFACE:-wlan0}"
 COOLDOWN_S="${COOLDOWN_S:-180}"       # reconnect cooldown
 TIMER_SEC="${TIMER_SEC:-60}"          # watchdog cadence
@@ -107,14 +107,14 @@ REACH_HOST1="${REACH_HOST1:-1.1.1.1}"
 REACH_HOST2="${REACH_HOST2:-8.8.8.8}"
 REACH_EVERY="${REACH_EVERY:-5m}"
 REACH_FAIL_MAX="${REACH_FAIL_MAX:-12}"
-# ---- GOLDENONE installer + runtime ----
-GOLDENONE_INSTALL_URL="${GOLDENONE_INSTALL_URL:-https://raw.githubusercontent.com/it-army-ua-scripts/ADSS/install/install.sh}"
-GOLDENONE_INSTALLER_PATH="${GOLDENONE_INSTALLER_PATH:-/opt/STATEONE/bin/}"
-GOLDENONE_BIN="${GOLDENONE_BIN:-/opt/STATEONE/bin/FOOBAR_proxy_linux}"
-GOLDENONE_LANG="${GOLDENONE_LANG:-en}"
-GOLDENONE_USER_ID="${GOLDENONE_USER_ID:-5272237815}"
-GOLDENONE_COPIES="${GOLDENONE_COPIES:-1}"
-GOLDENONE_THREADS="${GOLDENONE_THREADS:-4032}"
+# ---- ITARMY installer + runtime ----
+ITARMY_INSTALL_URL="${ITARMY_INSTALL_URL:-https://raw.githubusercontent.com/it-army-ua-scripts/ADSS/install/install.sh}"
+ITARMY_INSTALLER_PATH="${ITARMY_INSTALLER_PATH:-/opt/itarmy/bin/}"
+ITARMY_BIN="${ITARMY_BIN:-/opt/itarmy/bin/mhddos_proxy_linux}"
+ITARMY_LANG="${ITARMY_LANG:-en}"
+ITARMY_USER_ID="${ITARMY_USER_ID:-5272237815}"
+ITARMY_COPIES="${ITARMY_COPIES:-1}"
+ITARMY_THREADS="${ITARMY_THREADS:-4032}"
 
 
 need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; exit 1; }; }
@@ -206,9 +206,9 @@ systemctl try-restart ssh.service 2>/dev/null || true
 systemctl try-restart sshd.service 2>/dev/null || true
 
 
-echo "==> 2) Create FOOBAR.ini in user home directory"
+echo "==> 2) Create mhddos.ini in user home directory"
 
-INI_PATH="/home/${SUDO_USER:-${USER}}/FOOBAR.ini"
+INI_PATH="/home/${SUDO_USER:-${USER}}/mhddos.ini"
 
 cat <<'EOF' > "${INI_PATH}"
 # Змінити мову | Change language (ua | en | es | de | pl | lt)
@@ -235,8 +235,8 @@ EOF
 
 chown "${SUDO_USER:-${USER}}":"${SUDO_USER:-${USER}}" "${INI_PATH}"
 chmod 0644 "${INI_PATH}"
-mkdir -p /opt/STATEONE/bin
-cp "/home/${SUDO_USER:-${USER}}/FOOBAR.ini" /opt/STATEONE/bin/
+mkdir -p /opt/itarmy/bin
+cp "/home/${SUDO_USER:-${USER}}/mhddos.ini" /opt/itarmy/bin/
 
 
 
@@ -248,8 +248,8 @@ cat <<EOF | cat_as_root "${APP_ENV_FILE}" 0644
 # Environment for ${APP_NAME}.service
 # Put the real long-running command here.
 # Example:
-# WORKER_CMD="/opt/STATEONE/bin/FOOBAR_proxy_linux"
-WORKER_CMD="${GOLDENONE_BIN}"
+# WORKER_CMD="/opt/itarmy/bin/mhddos_proxy_linux"
+WORKER_CMD="${ITARMY_BIN}"
 EOF
 
 echo "==> 4) Create worker wrapper (${START_SCRIPT})"
@@ -259,7 +259,7 @@ cat <<'EOF' | cat_as_root "${APP_EXECSTART}" 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_FILE="/etc/default/FOOBAR_proxy_linux"
+ENV_FILE="/etc/default/mhddos_proxy_linux"
 if [[ -r "${ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
@@ -267,14 +267,16 @@ fi
 
 : "${WORKER_CMD:?WORKER_CMD is not set. Set WORKER_CMD in ${ENV_FILE}}"
 
-echo "Starting: ${WORKER_CMD}" | systemd-cat -t FOOBAR_proxy_linux
+echo "Starting: ${WORKER_CMD}" | systemd-cat -t mhddos_proxy_linux
 #exec "${WORKER_CMD}"
 
 # Mark packets so tc can match them
-iptables -t mangle -C OUTPUT -m owner --uid-owner "$(id -u)" -j MARK --set-mark 1 2>/dev/null \
-|| iptables -t mangle -A OUTPUT -m owner --uid-owner "$(id -u)" -j MARK --set-mark 1
+UID_TO_MARK="$(id -u)"
+iptables -t mangle -C OUTPUT -m owner --uid-owner "${UID_TO_MARK}" -j MARK --set-mark 1 2>/dev/null \
+|| iptables -t mangle -A OUTPUT -m owner --uid-owner "${UID_TO_MARK}" -j MARK --set-mark 1 2>/dev/null || true
 
-exec env MARK=1 "${WORKER_CMD}"
+exec "${WORKER_CMD}"
+
 
 EOF
 
@@ -503,13 +505,36 @@ echo "==> 10) Apply changes"
 systemctl daemon-reload
 systemctl restart systemd-journald
 # Restart NM so the powersave setting takes effect
-systemctl restart NetworkManager
-sleep 5
+systemctl try-restart NetworkManager || true
+sleep 2
+
 # Enable watchdog timer
 systemctl enable --now net-watchdog.timer
 systemctl start net-watchdog.service
 
-echo "==> 10.5) Deprioritize FOOBAR network traffic (tc, egress + ingress)"
+echo "==> 10.4) Ensure ifb0 exists at boot (systemd oneshot)"
+cat >/etc/systemd/system/ifb0-setup.service <<'EOF'
+[Unit]
+Description=Create ifb0 for ingress shaping
+After=systemd-modules-load.service
+Before=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/modprobe ifb
+ExecStart=/sbin/ip link add ifb0 type ifb
+ExecStart=/sbin/ip link set ifb0 up
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now ifb0-setup.service
+
+echo "==> 10.5) Deprioritize mhddos network traffic (tc, egress + ingress)"
 
 IFACE="${IFACE:-wlan0}"
 
@@ -523,14 +548,14 @@ tc qdisc del dev "${IFACE}" root 2>/dev/null || true
 tc qdisc del dev "${IFACE}" ingress 2>/dev/null || true
 tc qdisc del dev ifb0 root 2>/dev/null || true
 
-# --- EGREE (upload) shaping on ${IFACE} ---
-tc qdisc add dev "${IFACE}" root handle 1: htb default 30
+# --- EGRESS (upload) shaping on ${IFACE} ---
+tc qdisc add dev "${IFACE}" root handle 1: htb default 30 2>/dev/null || true
 
 # High-priority class for SSH/control traffic
 tc class add dev "${IFACE}" parent 1: classid 1:10 htb rate 5mbit ceil 20mbit prio 0
 tc qdisc add dev "${IFACE}" parent 1:10 handle 110: fq_codel
 
-# Low-priority class for FOOBAR (marked)
+# Low-priority class for mhddos (marked)
 tc class add dev "${IFACE}" parent 1: classid 1:20 htb rate 256kbit ceil 2mbit prio 7
 tc qdisc add dev "${IFACE}" parent 1:20 handle 120: fq_codel
 
@@ -544,7 +569,7 @@ tc filter add dev "${IFACE}" protocol ip parent 1: prio 1 u32 \
 tc filter add dev "${IFACE}" protocol ip parent 1: prio 1 u32 \
   match ip sport 22 0xffff flowid 1:10
 
-# FOOBAR: traffic marked via fwmark=1
+# mhddos: traffic marked via fwmark=1
 tc filter add dev "${IFACE}" protocol ip parent 1: prio 2 handle 1 fw flowid 1:20
 
 # --- INGRESS (download) shaping via ifb0 ---
@@ -570,7 +595,7 @@ tc filter add dev ifb0 protocol ip parent 2: prio 1 u32 \
 tc filter add dev ifb0 protocol ip parent 2: prio 1 u32 \
   match ip sport 22 0xffff flowid 2:10
 
-# Marked FOOBAR packets (if marked locally, responses still hit egress; this helps where marks appear)
+# Marked mhddos packets (if marked locally, responses still hit egress; this helps where marks appear)
 tc filter add dev ifb0 protocol ip parent 2: prio 2 handle 1 fw flowid 2:20
 
 echo "tc rules installed on ${IFACE} (egress) and ifb0 (ingress)"
@@ -629,9 +654,9 @@ need_root() {
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
-DEFAULT_NICE="${DEFAULT_NICE:-15}"
-DEFAULT_CPU_QUOTA="${DEFAULT_CPU_QUOTA:-85%}"
-DEFAULT_MEM_MAX="${DEFAULT_MEM_MAX:-1.2G}"
+DEFAULT_NICE="${DEFAULT_NICE:-19}"
+DEFAULT_CPU_QUOTA="${DEFAULT_CPU_QUOTA:-20%}"
+DEFAULT_MEM_MAX="${DEFAULT_MEM_MAX:-160M}"
 DEFAULT_RESTART_SEC="${DEFAULT_RESTART_SEC:-15}"
 DEFAULT_TIMEOUT_START="${DEFAULT_TIMEOUT_START:-20}"
 
@@ -985,25 +1010,25 @@ REACH_FAIL_MAX="${REACH_FAIL_MAX:-12}" REACH_EVERY="${REACH_EVERY:-5m}" \
 
 echo "==> 16) Install ADSS (download installer, then run it)"
 # curl -sL https://raw.githubusercontent.com/it-army-ua-scripts/ADSS/install/install.sh  | bash -s
-echo "Files in ${GOLDENONE_INSTALLER_PATH}."
+echo "Files in ${ITARMY_INSTALLER_PATH}."
 echo
-ls -la "${GOLDENONE_INSTALLER_PATH}"
+ls -la "${ITARMY_INSTALLER_PATH}"
 echo
-#rm -f "${GOLDENONE_INSTALLER_PATH}"
-echo "Installing from ${GOLDENONE_INSTALL_URL}"
-curl -fsSL "${GOLDENONE_INSTALL_URL}" | bash -s
+#rm -f "${ITARMY_INSTALLER_PATH}"
+echo "Installing from ${ITARMY_INSTALL_URL}"
+curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s
 
 echo "==> 16.1) Verify expected binary exists"
-if [[ ! -x "${GOLDENONE_BIN}" ]]; then
-  echo "ERROR: Expected binary not found or not executable: ${GOLDENONE_BIN}"
-  echo "Contents of ${GOLDENONE_INSTALLER_PATH}:"
-  ls -la "${GOLDENONE_INSTALLER_PATH}" || true
+if [[ ! -x "${ITARMY_BIN}" ]]; then
+  echo "ERROR: Expected binary not found or not executable: ${ITARMY_BIN}"
+  echo "Contents of ${ITARMY_INSTALLER_PATH}:"
+  ls -la "${ITARMY_INSTALLER_PATH}" || true
   exit 3
 fi
-echo "OK: Found executable: ${GOLDENONE_BIN}"
+echo "OK: Found executable: ${ITARMY_BIN}"
 
 # Ensure WorkingDirectory matches where the real binary lives
-APP_WORKDIR="$(dirname "${GOLDENONE_BIN}")"
+APP_WORKDIR="$(dirname "${ITARMY_BIN}")"
 if [[ ! -d "${APP_WORKDIR}" ]]; then
   echo "ERROR: APP_WORKDIR is not a directory: ${APP_WORKDIR}"
   exit 3
@@ -1018,7 +1043,7 @@ if [[ "${INSTALL_HARDENED_APP:-0}" == "1" ]]; then
     exit 1
   fi
     RUN_AS="${APP_USER:-root}" WORKDIR="${APP_WORKDIR}" ENV_FILE="${APP_ENV_FILE}" \
-    CPU_QUOTA="${APP_CPU_QUOTA:-85%}" MEM_MAX="${APP_MEM_MAX:-1.2G}" NICE="${APP_NICE:-15}" \
+    CPU_QUOTA="${APP_CPU_QUOTA}" MEM_MAX="${APP_MEM_MAX}" NICE="${APP_NICE}" \
       /usr/local/bin/service-hardened.sh install-service "${APP_NAME}" "${APP_EXECSTART}"
 else
   echo "Skipping hardened app service (INSTALL_HARDENED_APP=0)"
