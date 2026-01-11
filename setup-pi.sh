@@ -1045,12 +1045,12 @@ fi
 echo
 echo "==> 16.1) Verify installer laid down expected directories/files"
 echo
-if [[ ! -d /opt/itarmy/utils ]] || ! command -v update_ssda >/dev/null 2>&1; then
-  echo "[-] WARNING: SSDA installer did not lay down expected files (/opt/itarmy/utils, update_ssda)."
-  echo "[-] WARNING: Continuing without SSDA. Node setup is otherwise complete."
+if [[ ! -d /opt/itarmy/utils ]] || ! command -v update_adss >/dev/null 2>&1; then
+  echo "[-] WARNING: ADSS installer did not lay down expected files (/opt/itarmy/utils, update_adss)."
+  echo "[-] WARNING: Continuing without ADSS. Node setup is otherwise complete."
   # do NOT exit; do NOT return non-zero
 else
-  echo "[+] SSDA layout looks OK."
+  echo "[+] ADSS layout looks OK."
 fi
 
 echo
