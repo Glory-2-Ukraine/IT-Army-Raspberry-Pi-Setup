@@ -52,25 +52,17 @@ cp -a "$TARGET" "$BACKUP"
 if [[ "$MODE" == "clean" ]]; then
   # use placeholders to avoid collision
   sed -i \
-    -e 's/ITARMY/__PH_ITARMY__/g' \
-    -e 's/itarmy/__PH_itarmy__/g' \
-    -e 's/mhddos/__PH_mhddos__/g' \
-    -e 's/ADSS/__PH_SSDA__/g' \
-    -e 's/__PH_ITARMY__/GOLDENONE/g' \
-    -e 's/__PH_itarmy__/STATEONE/g' \
-    -e 's/__PH_mhddos__/FOOBAR/g' \
-    -e 's/__PH_ADSS__/SSDA/g' \
+    -e 's/ITARMY/GOLDENONE/g' \
+    -e 's/itarmy/STATEONE/g' \
+    -e 's/mhddos/FOOBAR/g' \
+    -e 's/ADSS/SSDA/g' \
     "$TARGET"
 else
   sed -i \
-    -e 's/GOLDENONE/__PH_GOLDEN__/g' \
-    -e 's/STATEONE/__PH_STATE__/g' \
-    -e 's/FOOBAR/__PH_FOOBAR__/g' \
-    -e 's/SSDA/__PH_ADSS__/g' \
-    -e 's/__PH_GOLDEN__/ITARMY/g' \
-    -e 's/__PH_STATE__/itarmy/g' \
-    -e 's/__PH_FOOBAR__/mhddos/g' \
-    -e 's/__PH_SSDA__/ADSS/g' \
+    -e 's/GOLDENONE/ITARMY/g' \
+    -e 's/STATEONE/itarmy/g' \
+    -e 's/FOOBAR/mhddos/g' \
+    -e 's/SSDA/ADSS/g' \
     "$TARGET"
 fi
 
