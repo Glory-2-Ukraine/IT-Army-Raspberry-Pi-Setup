@@ -1028,17 +1028,42 @@ if ! curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s; then
     exit 1
 fi
 
-# --- Fix missing binary ---
-echo "==> Fixing missing mhddos_proxy_linux binary"
-if [[ -f "/usr/local/bin/mhddos_proxy_linux" ]]; then
-    echo "[+] Found binary in /usr/local/bin/, moving to /opt/itarmy/bin/"
-    sudo mv /usr/local/bin/mhddos_proxy_linux /opt/itarmy/bin/
-    sudo chown root:root /opt/itarmy/bin/mhddos_proxy_linux
-    sudo chmod +x /opt/itarmy/bin/mhddos_proxy_linux
-else
-    echo "[-] ERROR: Binary not found in /usr/local/bin/. Manual download required."
-    exit 1
-fi
+# --- Installer post-check (do not attempt to recover/move binaries) ---
+echo "==> 16.1) Verify installer laid down expected directories/files"
+echo "Installer errors you showed indicate missing /opt/itarmy/utils/* and missing update_adss."
+echo "Failing fast with diagnostics."
+
+echo "---- ls -la /opt ----"
+ls -la /opt || true
+echo
+
+echo "---- ls -la /opt/itarmy ----"
+ls -la /opt/itarmy 2>/dev/null || echo "MISSING: /opt/itarmy"
+echo
+
+echo "---- ls -la /opt/itarmy/bin ----"
+ls -la /opt/itarmy/bin 2>/dev/null || echo "MISSING: /opt/itarmy/bin"
+echo
+
+echo "---- ls -la /opt/itarmy/utils ----"
+ls -la /opt/itarmy/utils 2>/dev/null || echo "MISSING: /opt/itarmy/utils"
+echo
+
+echo "---- dpkg --print-architecture ----"
+dpkg --print-architecture || true
+echo
+
+echo "---- uname -a ----"
+uname -a || true
+echo
+
+echo "---- journalctl (last 120 lines) for installer run context ----"
+journalctl -n 120 --no-pager || true
+echo
+
+echo "[-] ERROR: Installer did not lay down required files. Aborting before any service install."
+exit 1
+
 
 echo "Checking for binary in /opt/itarmy/bin/"
 ls -la /opt/itarmy/bin/
