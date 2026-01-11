@@ -620,8 +620,6 @@ EOF
 systemctl daemon-reload
 systemctl enable --now tc-ssh-qos.service
 
-
-
 echo "==> 11) Quick status snapshot"
 echo "---- nmcli dev status ----"
 nmcli -f DEVICE,TYPE,STATE,CONNECTION dev status || true
@@ -1044,52 +1042,20 @@ if ! curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s; then
     exit 1
 fi
 
-# --- Installer post-check (do not attempt to recover/move binaries) ---
+echo
 echo "==> 16.1) Verify installer laid down expected directories/files"
-echo "Installer errors you showed indicate missing /opt/itarmy/utils/* and missing update_adss."
-echo "Failing fast with diagnostics."
-
-echo "---- ls -la /opt ----"
-ls -la /opt || true
 echo
-
-echo "---- ls -la /opt/itarmy ----"
-ls -la /opt/itarmy 2>/dev/null || echo "MISSING: /opt/itarmy"
-echo
-
-echo "---- ls -la /opt/itarmy/bin ----"
-ls -la /opt/itarmy/bin 2>/dev/null || echo "MISSING: /opt/itarmy/bin"
-echo
-
-echo "---- ls -la /opt/itarmy/utils ----"
-ls -la /opt/itarmy/utils 2>/dev/null || echo "MISSING: /opt/itarmy/utils"
-echo
-
-echo "---- dpkg --print-architecture ----"
-dpkg --print-architecture || true
-echo
-
-echo "---- uname -a ----"
-uname -a || true
-echo
-
-echo "---- journalctl (last 120 lines) for installer run context ----"
-journalctl -n 120 --no-pager || true
-echo
-
-echo "[-] ERROR: Installer did not lay down required files. Aborting before any service install."
-exit 1
-
-
-echo "Checking for binary in /opt/itarmy/bin/"
-ls -la /opt/itarmy/bin/
-if [[ ! -x "/opt/itarmy/bin/mhddos_proxy_linux" ]]; then
-    echo "[-] ERROR: Binary not found or not executable in /opt/itarmy/bin/"
-    exit 1
+if [[ ! -d /opt/itarmy/utils ]] || ! command -v update_ssda >/dev/null 2>&1; then
+  echo "[-] WARNING: SSDA installer did not lay down expected files (/opt/itarmy/utils, update_ssda)."
+  echo "[-] WARNING: Continuing without SSDA. Node setup is otherwise complete."
+  # do NOT exit; do NOT return non-zero
+else
+  echo "[+] SSDA layout looks OK."
 fi
 
-
-echo "==> 16.1) Verify expected binary exists"
+echo
+echo "==> 16.2) Verify expected binary exists"
+echo
 if [[ ! -x "${ITARMY_BIN}" ]]; then
   echo "[-] ERROR: Expected binary not found or not executable: ${ITARMY_BIN}"
   echo "Contents of ${ITARMY_INSTALLER_PATH}:"
