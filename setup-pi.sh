@@ -1028,6 +1028,19 @@ if ! curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s; then
     echo "[-] ERROR: Installer failed. Check the output above."
     exit 1
 fi
+
+# --- Fix missing binary ---
+echo "==> Fixing missing mhddos_proxy_linux binary"
+if [[ -f "/usr/local/bin/mhddos_proxy_linux" ]]; then
+    echo "Found binary in /usr/local/bin/, moving to /opt/itarmy/bin/"
+    sudo mv /usr/local/bin/mhddos_proxy_linux /opt/itarmy/bin/
+    sudo chown root:root /opt/itarmy/bin/mhddos_proxy_linux
+    sudo chmod +x /opt/itarmy/bin/mhddos_proxy_linux
+else
+    echo "ERROR: Binary not found in /usr/local/bin/ either. Manual download required."
+    exit 1
+fi
+
 echo
 echo "Checking for binary in /opt/itarmy/bin/"
 echo
