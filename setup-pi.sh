@@ -185,8 +185,24 @@ if [[ "${INSTALL_TOOLS}" == "1" ]]; then
 fi
 
 echo "==> 1.2) Disable swap to prevent VM thrash"
-dphys-swapfile swapoff || true
-systemctl disable dphys-swapfile || true
+
+# If dphys-swapfile exists (older Raspberry Pi OS images), stop/disable it.
+if command -v dphys-swapfile >/dev/null 2>&1; then
+  dphys-swapfile swapoff || true
+fi
+if systemctl list-unit-files | awk '{print $1}' | grep -qx 'dphys-swapfile.service'; then
+  systemctl disable --now dphys-swapfile.service 2>/dev/null || true
+fi
+
+# Always: turn off any active swap immediately.
+swapoff -a 2>/dev/null || true
+
+# Always: prevent swap from coming back via /etc/fstab (idempotent).
+if [[ -f /etc/fstab ]]; then
+  cp -a /etc/fstab "/etc/fstab.BACKUP.$(date +%Y%m%d-%H%M%S)"
+  sed -i -E 's@^([^#].*\s+swap\s+.*)$@# disabled by setup-pi.sh: \1@' /etc/fstab
+fi
+
 
 echo "==> 1.5) SSH service priority (systemd drop-in)"
 mkdir -p /etc/systemd/system/ssh.service.d /etc/systemd/system/sshd.service.d
