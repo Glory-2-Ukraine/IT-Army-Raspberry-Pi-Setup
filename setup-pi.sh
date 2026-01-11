@@ -1081,16 +1081,17 @@ journalctl -u "${APP_NAME}.service" -n 50 --no-pager || true
 
 echo "==> 21) Install resource monitor + auto-adjuster for ${APP_NAME}"
 
-cat <<'EOF' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
+# --- Create resource-monitor.sh ---
+cat <<'MONITOR_SCRIPT' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
 # Configuration
 INI_FILE="/opt/itarmy/bin/mhddos.ini"
 SERVICE_NAME="mhddos_proxy_linux"
-THRESHOLD_CPU=90       # CPU usage threshold (%)
-THRESHOLD_MEM=85       # Memory usage threshold (%)
-CHECK_INTERVAL=60      # Check every 60 seconds
+THRESHOLD_CPU=50       # Lowered to 50% for your load
+THRESHOLD_MEM=85
+CHECK_INTERVAL=60
 LOG_FILE="/var/log/resource-monitor.log"
 
 # Function to get CPU usage (1-minute average)
@@ -1111,16 +1112,25 @@ adjust_ini() {
     local mem=$2
     local changed=0
 
+    echo "$(date -Is) Checking INI file: $INI_FILE" >> "$LOG_FILE"
     if [ $cpu -gt $THRESHOLD_CPU ] || [ $mem -gt $THRESHOLD_MEM ]; then
+        echo "$(date -Is) Threshold exceeded: CPU=$cpu%, MEM=$mem%" >> "$LOG_FILE"
         if grep -q "threads =" "$INI_FILE"; then
             local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
-            if [ $threads -gt 1024 ]; then
-                threads=$((threads - 1024))
+            echo "$(date -Is) Current threads: $threads" >> "$LOG_FILE"
+            if [ $threads -gt 512 ]; then
+                threads=$((threads - 256))
+                echo "$(date -Is) Reducing threads to $threads" >> "$LOG_FILE"
                 sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
-                echo "$(date -Is) Reduced threads to $threads due to high resource usage." >> "$LOG_FILE"
                 changed=1
+            else
+                echo "$(date -Is) Threads already at minimum ($threads)" >> "$LOG_FILE"
             fi
+        else
+            echo "$(date -Is) threads= not found in $INI_FILE" >> "$LOG_FILE"
         fi
+    else
+        echo "$(date -Is) No threshold exceeded: CPU=$cpu%, MEM=$mem%" >> "$LOG_FILE"
     fi
     return $changed
 }
@@ -1145,10 +1155,11 @@ while true; do
     fi
     sleep $CHECK_INTERVAL
 done
-EOF
+MONITOR_SCRIPT
 
+# --- Create systemd service ---
 echo "==> 21.1) Install systemd unit for resource monitor"
-cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.service 0644
+cat <<'MONITOR_SERVICE' | cat_as_root /etc/systemd/system/resource-monitor.service 0644
 [Unit]
 Description=Resource Monitor for ${APP_NAME}
 After=network-online.target
@@ -1164,10 +1175,11 @@ SyslogIdentifier=resource-monitor
 
 [Install]
 WantedBy=multi-user.target
-EOF
+MONITOR_SERVICE
 
+# --- Create systemd timer ---
 echo "==> 21.2) Install systemd timer for resource monitor"
-cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.timer 0644
+cat <<'MONITOR_TIMER' | cat_as_root /etc/systemd/system/resource-monitor.timer 0644
 [Unit]
 Description=Run resource monitor every minute
 
@@ -1179,14 +1191,16 @@ Unit=resource-monitor.service
 
 [Install]
 WantedBy=timers.target
-EOF
+MONITOR_TIMER
 
+# --- Enable and start ---
 echo "==> 21.3) Enable and start resource monitor"
 systemctl daemon-reload
 systemctl enable --now resource-monitor.timer
 systemctl start resource-monitor.service
 
-echo "==> 21.4) Quick status snapshot"
-systemctl status resource-monitor.timer --no-pager || true
-echo "Log file: ${LOG_FILE}"
-
+# --- Log location ---
+echo "==> 21.4) Log file: ${LOG_FILE:-/var/log/resource-monitor.log}"
+touch /var/log/resource-monitor.log
+chown root:root /var/log/resource-monitor.log
+chmod 664 /var/log/resource-monitor.log
