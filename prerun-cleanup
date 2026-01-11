@@ -1,1 +1,2 @@
-
+sudo rm /usr/local/bin/*
+sudo rm /opt/itarmy/bin/*
