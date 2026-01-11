@@ -1079,3 +1079,114 @@ systemctl is-enabled "${APP_NAME}.service" --quiet && echo "OK: enabled" || echo
 systemctl is-active  "${APP_NAME}.service" --quiet && echo "OK: active"  || echo "WARN: not active"
 journalctl -u "${APP_NAME}.service" -n 50 --no-pager || true
 
+echo "==> 21) Install resource monitor + auto-adjuster for ${APP_NAME}"
+
+cat <<'EOF' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Configuration
+INI_FILE="/opt/itarmy/bin/mhddos.ini"
+SERVICE_NAME="mhddos_proxy_linux"
+THRESHOLD_CPU=90       # CPU usage threshold (%)
+THRESHOLD_MEM=85       # Memory usage threshold (%)
+CHECK_INTERVAL=60      # Check every 60 seconds
+LOG_FILE="/var/log/resource-monitor.log"
+
+# Function to get CPU usage (1-minute average)
+get_cpu_usage() {
+    local cpu=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+    echo $(printf "%.0f" $cpu)
+}
+
+# Function to get memory usage (%)
+get_mem_usage() {
+    local mem=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
+    echo $(printf "%.0f" $mem)
+}
+
+# Function to adjust INI file
+adjust_ini() {
+    local cpu=$1
+    local mem=$2
+    local changed=0
+
+    if [ $cpu -gt $THRESHOLD_CPU ] || [ $mem -gt $THRESHOLD_MEM ]; then
+        if grep -q "threads =" "$INI_FILE"; then
+            local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
+            if [ $threads -gt 1024 ]; then
+                threads=$((threads - 1024))
+                sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
+                echo "$(date -Is) Reduced threads to $threads due to high resource usage." >> "$LOG_FILE"
+                changed=1
+            fi
+        fi
+    fi
+    return $changed
+}
+
+# Function to restart service
+restart_service() {
+    echo "$(date -Is) Restarting $SERVICE_NAME..." >> "$LOG_FILE"
+    systemctl restart "$SERVICE_NAME"
+}
+
+# Main monitoring loop
+while true; do
+    cpu=$(get_cpu_usage)
+    mem=$(get_mem_usage)
+    echo "$(date -Is) CPU: $cpu%, Memory: $mem%" >> "$LOG_FILE"
+
+    if [ $cpu -gt $THRESHOLD_CPU ] || [ $mem -gt $THRESHOLD_MEM ]; then
+        echo "$(date -Is) Resource threshold exceeded!" >> "$LOG_FILE"
+        if adjust_ini $cpu $mem; then
+            restart_service
+        fi
+    fi
+    sleep $CHECK_INTERVAL
+done
+EOF
+
+echo "==> 21.1) Install systemd unit for resource monitor"
+cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.service 0644
+[Unit]
+Description=Resource Monitor for ${APP_NAME}
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/resource-monitor.sh
+Restart=on-failure
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=resource-monitor
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+echo "==> 21.2) Install systemd timer for resource monitor"
+cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.timer 0644
+[Unit]
+Description=Run resource monitor every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=resource-monitor.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+echo "==> 21.3) Enable and start resource monitor"
+systemctl daemon-reload
+systemctl enable --now resource-monitor.timer
+systemctl start resource-monitor.service
+
+echo "==> 21.4) Quick status snapshot"
+systemctl status resource-monitor.timer --no-pager || true
+echo "Log file: ${LOG_FILE}"
+
