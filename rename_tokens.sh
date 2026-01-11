@@ -56,6 +56,7 @@ if [[ "$MODE" == "clean" ]]; then
     -e 's/itarmy/STATEONE/g' \
     -e 's/mhddos/FOOBAR/g' \
     -e 's/ADSS/SSDA/g' \
+    -e 's/adss/ssda/g' \
     "$TARGET"
 else
   sed -i \
@@ -63,6 +64,7 @@ else
     -e 's/STATEONE/itarmy/g' \
     -e 's/FOOBAR/mhddos/g' \
     -e 's/SSDA/ADSS/g' \
+    -e 's/ssda/adss/g' \
     "$TARGET"
 fi
 
