@@ -114,7 +114,7 @@ ITARMY_BIN="${ITARMY_BIN:-/opt/itarmy/bin/mhddos_proxy_linux}"
 ITARMY_LANG="${ITARMY_LANG:-en}"
 ITARMY_USER_ID="${ITARMY_USER_ID:-5272237815}"
 ITARMY_COPIES="${ITARMY_COPIES:-1}"
-ITARMY_THREADS="${ITARMY_THREADS:-4032}"
+ITARMY_THREADS="${ITARMY_THREADS:-512}"
 
 
 need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; exit 1; }; }
@@ -183,6 +183,10 @@ apt-get install -y "${PKGS_MINIMAL[@]}"
 if [[ "${INSTALL_TOOLS}" == "1" ]]; then
   apt-get install -y "${PKGS_OPS[@]}"
 fi
+
+echo "==> 1.2) Disable swap to prevent VM thrash"
+dphys-swapfile swapoff || true
+systemctl disable dphys-swapfile || true
 
 echo "==> 1.5) SSH service priority (systemd drop-in)"
 mkdir -p /etc/systemd/system/ssh.service.d /etc/systemd/system/sshd.service.d
