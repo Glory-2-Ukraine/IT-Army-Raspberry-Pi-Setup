@@ -1,2 +1,10 @@
 sudo rm /usr/local/bin/*
 sudo rm /opt/itarmy/bin/*
+
+sed -i \
+  -e 's/ITARMY/GOLDENONE/g' \
+  -e 's/itarmy/STATEONE/g' \
+  -e 's/mhddos/FOOBAR/g' \
+  -e 's/ADSS/SSDA/g' \
+  -e 's/adss/ssda/g' \
+  /home/pi/tools/it-army/results
