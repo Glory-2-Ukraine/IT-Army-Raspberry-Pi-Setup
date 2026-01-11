@@ -198,13 +198,6 @@ IOWeight=1000
 Nice=-5
 EOF
 
-cat >/etc/systemd/system/sshd.service.d/10-priority.conf <<'EOF'
-[Service]
-CPUWeight=1000
-IOWeight=1000
-Nice=-5
-EOF
-
 systemctl daemon-reload
 systemctl try-restart ssh.service 2>/dev/null || true
 systemctl try-restart sshd.service 2>/dev/null || true
@@ -224,7 +217,7 @@ copies = 1
 
 # Кількість потоків на 1 копію | Number of threads per copy
 # Для активації приберіть символ # | Remove the # symbol to enable 
-threads = 4032
+threads = 256
 
 # Атака через мій IP у % від 0 до 100 (обов'язковий VPN чи віддалений сервер)
 # Use my IP for the attack in % from 0 to 100 (requires VPN or remote server)
@@ -1028,17 +1021,38 @@ echo
 ls -la "${ITARMY_INSTALLER_PATH}"
 echo
 #rm -f "${ITARMY_INSTALLER_PATH}"
+echo
 echo "Installing from ${ITARMY_INSTALL_URL}"
-curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s
+echo
+if ! curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s; then
+    echo "[-] ERROR: Installer failed. Check the output above."
+    exit 1
+fi
+echo
+echo "Checking for binary in /opt/itarmy/bin/"
+echo
+ls -la /opt/itarmy/bin/
+if [[ ! -x "/opt/itarmy/bin/mhddos_proxy_linux" ]]; then
+    echo "ERROR: Binary not found in /opt/itarmy/bin/"
+    echo "Searching for mhddos_proxy_linux in common locations..."
+    sudo find / -name mhddos_proxy_linux 2>/dev/null
+    exit 1
+fi
+if [[ -f "/usr/local/bin/mhddos_proxy_linux" ]]; then
+    echo "[-] Found binary in /usr/local/bin/, moving to /opt/itarmy/bin/"
+    sudo mv /usr/local/bin/mhddos_proxy_linux /opt/itarmy/bin/
+    sudo chown root:root /opt/itarmy/bin/mhddos_proxy_linux
+    sudo chmod +x /opt/itarmy/bin/mhddos_proxy_linux
+fi
 
 echo "==> 16.1) Verify expected binary exists"
 if [[ ! -x "${ITARMY_BIN}" ]]; then
-  echo "ERROR: Expected binary not found or not executable: ${ITARMY_BIN}"
+  echo "[-] ERROR: Expected binary not found or not executable: ${ITARMY_BIN}"
   echo "Contents of ${ITARMY_INSTALLER_PATH}:"
   ls -la "${ITARMY_INSTALLER_PATH}" || true
   exit 3
 fi
-echo "OK: Found executable: ${ITARMY_BIN}"
+echo "[+] OK: Found executable: ${ITARMY_BIN}"
 
 # Ensure WorkingDirectory matches where the real binary lives
 APP_WORKDIR="$(dirname "${ITARMY_BIN}")"
