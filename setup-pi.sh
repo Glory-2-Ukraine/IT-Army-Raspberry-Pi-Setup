@@ -1023,7 +1023,6 @@ echo
 #rm -f "${ITARMY_INSTALLER_PATH}"
 echo
 echo "Installing from ${ITARMY_INSTALL_URL}"
-echo
 if ! curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s; then
     echo "[-] ERROR: Installer failed. Check the output above."
     exit 1
@@ -1032,31 +1031,22 @@ fi
 # --- Fix missing binary ---
 echo "==> Fixing missing mhddos_proxy_linux binary"
 if [[ -f "/usr/local/bin/mhddos_proxy_linux" ]]; then
-    echo "Found binary in /usr/local/bin/, moving to /opt/itarmy/bin/"
+    echo "[+] Found binary in /usr/local/bin/, moving to /opt/itarmy/bin/"
     sudo mv /usr/local/bin/mhddos_proxy_linux /opt/itarmy/bin/
     sudo chown root:root /opt/itarmy/bin/mhddos_proxy_linux
     sudo chmod +x /opt/itarmy/bin/mhddos_proxy_linux
 else
-    echo "ERROR: Binary not found in /usr/local/bin/ either. Manual download required."
+    echo "[-] ERROR: Binary not found in /usr/local/bin/. Manual download required."
     exit 1
 fi
 
-echo
 echo "Checking for binary in /opt/itarmy/bin/"
-echo
 ls -la /opt/itarmy/bin/
 if [[ ! -x "/opt/itarmy/bin/mhddos_proxy_linux" ]]; then
-    echo "ERROR: Binary not found in /opt/itarmy/bin/"
-    echo "Searching for mhddos_proxy_linux in common locations..."
-    sudo find / -name mhddos_proxy_linux 2>/dev/null
+    echo "[-] ERROR: Binary not found or not executable in /opt/itarmy/bin/"
     exit 1
 fi
-if [[ -f "/usr/local/bin/mhddos_proxy_linux" ]]; then
-    echo "[-] Found binary in /usr/local/bin/, moving to /opt/itarmy/bin/"
-    sudo mv /usr/local/bin/mhddos_proxy_linux /opt/itarmy/bin/
-    sudo chown root:root /opt/itarmy/bin/mhddos_proxy_linux
-    sudo chmod +x /opt/itarmy/bin/mhddos_proxy_linux
-fi
+
 
 echo "==> 16.1) Verify expected binary exists"
 if [[ ! -x "${ITARMY_BIN}" ]]; then
@@ -1075,18 +1065,13 @@ if [[ ! -d "${APP_WORKDIR}" ]]; then
 fi
 echo "OK: APP_WORKDIR=${APP_WORKDIR}"
 
-
 echo "==> 17) Install hardened app service (${APP_NAME})"
 if [[ "${INSTALL_HARDENED_APP:-0}" == "1" ]]; then
-  if [[ -z "${APP_NAME:-}" || -z "${APP_EXECSTART:-}" ]]; then
-    echo "ERROR: INSTALL_HARDENED_APP=1 but APP_NAME or APP_EXECSTART is empty."
-    exit 1
-  fi
     RUN_AS="${APP_USER:-root}" WORKDIR="${APP_WORKDIR}" ENV_FILE="${APP_ENV_FILE}" \
     CPU_QUOTA="${APP_CPU_QUOTA}" MEM_MAX="${APP_MEM_MAX}" NICE="${APP_NICE}" \
       /usr/local/bin/service-hardened.sh install-service "${APP_NAME}" "${APP_EXECSTART}"
 else
-  echo "Skipping hardened app service (INSTALL_HARDENED_APP=0)"
+    echo "Skipping hardened app service (INSTALL_HARDENED_APP=0)"
 fi
 
 echo "==> 18) Deadman restart ${APP_NAME} if inactive every 6 hours (timer)"
@@ -1116,7 +1101,7 @@ set -euo pipefail
 # Configuration
 INI_FILE="/opt/itarmy/bin/mhddos.ini"
 SERVICE_NAME="mhddos_proxy_linux"
-THRESHOLD_CPU=50       # Lowered to 50% for your load
+THRESHOLD_CPU=50
 THRESHOLD_MEM=85
 CHECK_INTERVAL=60
 LOG_FILE="/var/log/resource-monitor.log"
