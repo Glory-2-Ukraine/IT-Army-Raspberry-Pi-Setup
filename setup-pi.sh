@@ -672,7 +672,7 @@ need_root() {
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 DEFAULT_RESTART_SEC="${DEFAULT_RESTART_SEC:-15}"
-DEFAULT_TIMEOUT_START="${_TIMEOUT_START:-20}"
+DEFAULT_TIMEOUT_START="${DEFAULT_TIMEOUT_START:-20}"
 
 install_hardened_service() {
   local app="${1:?APP_NAME required}"
@@ -689,7 +689,7 @@ install_hardened_service() {
   local mem_max="${MEM_MAX}"
   local nice="${NICE}"
   local restart_sec="${RESTART_SEC:-$DEFAULT_RESTART_SEC}"
-  local timeout_start="${TIMEOUT_START:-$_TIMEOUT_START}"
+  local timeout_start="${TIMEOUT_START:-$DEFAULT_TIMEOUT_START}"
 
   local unit="/etc/systemd/system/${app}.service"
   backup_if_exists "$unit"
