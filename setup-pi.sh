@@ -1130,40 +1130,70 @@ journalctl -u "${APP_NAME}.service" -n 50 --no-pager || true
 echo "==> 21) Install resource monitor + auto-adjuster for ${APP_NAME}"
 
 # --- Create resource-monitor.sh ---
-
-cat <<'MONITOR_SCRIPT' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
+cat <<MONITOR_SCRIPT | cat_as_root /usr/local/bin/resource-monitor.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
-# oneshot; timer triggers it
-
-SERVICE_NAME="${SERVICE_NAME:-}"
-THRESHOLD_CPU="${THRESHOLD_CPU:-85}"
-THRESHOLD_MEM="${THRESHOLD_MEM:-90}"
-
-log() { logger -t resource-monitor "$*"; }
+INI_FILE="${ITARMY_INSTALLER_PATH}/mhddos.ini"
+SERVICE_NAME="${APP_NAME}"
+THRESHOLD_CPU=\${THRESHOLD_CPU:-${APP_CPU_QUOTA%\%}}  # Use tunable (20%)
+THRESHOLD_MEM=\${THRESHOLD_MEM:-${APP_MEM_MAX%M}}    # Use tunable (160M)
+LOG_FILE="/var/log/resource-monitor.log"
 
 cpu_usage() {
-  local idle
-  idle="$(top -bn1 | awk -F',' '/Cpu\(s\)/{print $4}' | awk '{print $1}' | tr -d '%id' || echo 0)"
-  awk -v idle="$idle" 'BEGIN{printf "%d\n", (100 - idle)}'
+  local idle=\$(top -bn1 | awk -F',' '/Cpu\(s\)/{print \$4}' | awk '{print \$1}' | tr -d '%id' || echo 0)
+  awk -v idle="\$idle" 'BEGIN{printf "%d\n", (100 - idle)}'
 }
 
 mem_usage() {
-  awk '/Mem:/ {printf "%d\n", ($3/$2)*100}' < <(free -m)
+  awk '/Mem:/ {printf "%d\n", (\$3/\$2)*100}' < <(free -m)
 }
 
-cpu="$(cpu_usage)"
-mem="$(mem_usage)"
-log "CPU=${cpu}% MEM=${mem}%"
-
-if [[ -n "${SERVICE_NAME}" ]]; then
-  if (( cpu > THRESHOLD_CPU || mem > THRESHOLD_MEM )); then
-    log "THRESHOLD exceeded; restarting ${SERVICE_NAME}"
-    systemctl restart "${SERVICE_NAME}" || true
+adjust_ini() {
+  local cpu=\$1
+  local mem=\$2
+  if [[ \$cpu -gt \$THRESHOLD_CPU ]] || [[ \$mem -gt \$THRESHOLD_MEM ]]; then
+    if grep -q "threads =" "\$INI_FILE"; then
+      local threads=\$(grep "threads =" "\$INI_FILE" | awk '{print \$3}')
+      if [[ \$threads -gt 512 ]]; then
+        threads=\$((threads - 256))
+        sed -i "s/threads = .*/threads = \$threads/" "\$INI_FILE"
+        systemctl restart "\$SERVICE_NAME"
+        echo "\$(date -Is) Reduced threads to \$threads" >> "\$LOG_FILE"
+      fi
+    fi
   fi
-fi
+}
+
+cpu=\$(cpu_usage)
+mem=\$(mem_usage)
+echo "\$(date -Is) CPU=\$cpu% MEM=\$mem%" >> "\$LOG_FILE"
+adjust_ini "\$cpu" "\$mem"
 MONITOR_SCRIPT
+
+# --- Create systemd service ---
+cat <<MONITOR_SERVICE | cat_as_root /etc/systemd/system/resource-monitor.service 0644
+[Unit]
+Description=Resource Monitor for ${APP_NAME}
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=INI_FILE=${ITARMY_INSTALLER_PATH}/mhddos.ini
+Environment=SERVICE_NAME=${APP_NAME}
+Environment=THRESHOLD_CPU=${APP_CPU_QUOTA%\%}
+Environment=THRESHOLD_MEM=${APP_MEM_MAX%M}
+ExecStart=/usr/local/bin/resource-monitor.sh
+Restart=on-failure
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=resource-monitor
+
+[Install]
+WantedBy=multi-user.target
+MONITOR_SERVICE
+
 
 
 # --- Create systemd service ---
