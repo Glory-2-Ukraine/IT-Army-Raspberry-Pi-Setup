@@ -8,3 +8,31 @@ sed -i \
   -e 's/ADSS/SSDA/g' \
   -e 's/adss/ssda/g' \
   /home/pi/tools/it-army/results
+
+
+# stop/disable anything app-related if it exists
+sudo systemctl disable --now mhddos_proxy_linux.service 2>/dev/null || true
+sudo systemctl disable --now mhddos_proxy_linux-heartbeat.timer mhddos_proxy_linux-restart.timer 2>/dev/null || true
+sudo systemctl disable --now resource-monitor.timer 2>/dev/null || true
+sudo systemctl stop resource-monitor.service 2>/dev/null || true
+
+# remove app units (if they exist)
+sudo rm -f /etc/systemd/system/mhddos_proxy_linux.service
+sudo rm -f /etc/systemd/system/mhddos_proxy_linux-heartbeat.service
+sudo rm -f /etc/systemd/system/mhddos_proxy_linux-restart.service
+sudo rm -f /etc/systemd/system/mhddos_proxy_linux-heartbeat.timer
+sudo rm -f /etc/systemd/system/mhddos_proxy_linux-restart.timer
+sudo rm -f /etc/systemd/system/resource-monitor.service
+sudo rm -f /etc/systemd/system/resource-monitor.timer
+
+# remove app wrapper + env file
+sudo rm -f /usr/local/bin/mhddos_proxy_linux-worker.sh
+sudo rm -f /etc/default/mhddos_proxy_linux
+sudo rm -f /etc/mhddos_proxy_linux
+
+# remove the incomplete install dir
+sudo rm -rf /opt/itarmy
+
+# reload systemd
+sudo systemctl daemon-reload
+sudo systemctl reset-failed
