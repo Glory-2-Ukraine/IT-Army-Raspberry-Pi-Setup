@@ -1039,11 +1039,15 @@ ls -la "${ITARMY_INSTALLER_PATH}"
 echo
 #rm -f "${ITARMY_INSTALLER_PATH}"
 echo
-echo "Installing from ${ITARMY_INSTALL_URL}"
+echo "[+] Installing from ${ITARMY_INSTALL_URL}"
+echo
 if ! curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s; then
     echo "[-] ERROR: Installer failed. Check the output above."
     exit 1
 fi
+ls -la "${ITARMY_INSTALLER_PATH}"
+ls -la /opt/itarmy/bin
+ls -la /usr/local/bin
 
 #echo
 #echo "==> 16.1) Verify installer laid down expected directories/files"
@@ -1066,15 +1070,15 @@ fi
 #  ls -la "${ITARMY_INSTALLER_PATH}" || true
 #  exit 0
 #fi
-echo "[+] OK: Found executable: ${ITARMY_BIN}"
+#echo "[+] OK: Found executable: ${ITARMY_BIN}"
 
 # Ensure WorkingDirectory matches where the real binary lives
-APP_WORKDIR="$(dirname "${ITARMY_BIN}")"
-if [[ ! -d "${APP_WORKDIR}" ]]; then
-  echo "ERROR: APP_WORKDIR is not a directory: ${APP_WORKDIR}"
-  exit 3
-fi
-echo "OK: APP_WORKDIR=${APP_WORKDIR}"
+#APP_WORKDIR="$(dirname "${ITARMY_BIN}")"
+#if [[ ! -d "${APP_WORKDIR}" ]]; then
+#  echo "ERROR: APP_WORKDIR is not a directory: ${APP_WORKDIR}"
+#  exit 3
+#fi
+#echo "OK: APP_WORKDIR=${APP_WORKDIR}"
 
 echo "==> 17) Install hardened app service (${APP_NAME})"
 if [[ "${INSTALL_HARDENED_APP:-0}" == "1" ]]; then
