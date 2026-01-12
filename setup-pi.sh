@@ -84,7 +84,7 @@ APP_USER="pi"
 
 START_SCRIPT="${APP_NAME}-worker.sh"
 APP_EXECSTART="/usr/local/bin/${START_SCRIPT}"
-APP_ENV_FILE="/etc//${APP_NAME}"
+APP_ENV_FILE="/etc/default/${APP_NAME}"
 
 APP_WORKDIR=""
 
@@ -148,7 +148,12 @@ backup_if_exists() {
   fi
 }
 
-cat_as_root() { tee "$1" >/dev/null; chmod "${2:-0644}" "$1"; }
+cat_as_root() {
+  local path="$1" mode="${2:-0644}"
+  tee "$path" >/dev/null
+  chown root:root "$path"
+  chmod "$mode" "$path"
+}
 
 need_root
 pi_guard
@@ -272,7 +277,7 @@ cat <<'EOF' | cat_as_root "${APP_EXECSTART}" 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_FILE="/etc//mhddos_proxy_linux"
+ENV_FILE="/etc/default/mhddos_proxy_linux"
 if [[ -r "${ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
@@ -282,11 +287,6 @@ fi
 
 echo "Starting: ${WORKER_CMD}" | systemd-cat -t mhddos_proxy_linux
 #exec "${WORKER_CMD}"
-
-# Mark packets so tc can match them
-UID_TO_MARK="$(id -u)"
-iptables -t mangle -C OUTPUT -m owner --uid-owner "${UID_TO_MARK}" -j MARK --set-mark 1 2>/dev/null \
-|| iptables -t mangle -A OUTPUT -m owner --uid-owner "${UID_TO_MARK}" -j MARK --set-mark 1 2>/dev/null || true
 
 exec "${WORKER_CMD}"
 
@@ -603,8 +603,8 @@ echo "==> 10.6) systemd unit to apply tc QoS after network-online"
 cat <<EOF | cat_as_root /etc/systemd/system/tc-ssh-qos.service 0644
 [Unit]
 Description=Apply tc QoS for LAN SSH
-After=network-online.target NetworkManager.service
-Wants=network-online.target
+After=network-online.target NetworkManager.service ifb0-setup.service
+Wants=network-online.target ifb0-setup.service
 
 [Service]
 Type=oneshot
@@ -1011,6 +1011,11 @@ ln -sf /usr/local/lib/service-hardened.sh /usr/local/bin/service-hardened.sh
 echo "==> 13) Enable kernel watchdog stack (firmware + watchdog daemon + config)"
 WATCHDOG_DEVICE="${WATCHDOG_DEVICE:-/dev/watchdog}" WATCHDOG_TIMEOUT="${WATCHDOG_TIMEOUT:-15}" \
   /usr/local/bin/service-hardened.sh enable-watchdog
+systemctl unmask watchdog.service 2>/dev/null || true
+systemctl daemon-reload
+systemctl enable watchdog.service 2>/dev/null || true
+systemctl restart watchdog.service 2>/dev/null || true
+
 
 echo "==> 14) Install network reachability reboot watchdog (timer-based)"
 REACH_NAME="${REACH_NAME:-net-reach}" REACH_HOST1="${REACH_HOST1:-1.1.1.1}" REACH_HOST2="${REACH_HOST2:-8.8.8.8}" \
@@ -1102,99 +1107,57 @@ journalctl -u "${APP_NAME}.service" -n 50 --no-pager || true
 echo "==> 21) Install resource monitor + auto-adjuster for ${APP_NAME}"
 
 # --- Create resource-monitor.sh ---
+
 cat <<'MONITOR_SCRIPT' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Configuration
-INI_FILE="/opt/itarmy/bin/mhddos.ini"
-SERVICE_NAME="mhddos_proxy_linux"
-THRESHOLD_CPU=50
-THRESHOLD_MEM=85
-CHECK_INTERVAL=60
-LOG_FILE="/var/log/resource-monitor.log"
+# oneshot; timer triggers it
 
-# Function to get CPU usage (1-minute average)
-get_cpu_usage() {
-    local cpu=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
-    echo $(printf "%.0f" $cpu)
+SERVICE_NAME="${SERVICE_NAME:-}"
+THRESHOLD_CPU="${THRESHOLD_CPU:-85}"
+THRESHOLD_MEM="${THRESHOLD_MEM:-90}"
+
+log() { logger -t resource-monitor "$*"; }
+
+cpu_usage() {
+  local idle
+  idle="$(top -bn1 | awk -F',' '/Cpu\(s\)/{print $4}' | awk '{print $1}' | tr -d '%id' || echo 0)"
+  awk -v idle="$idle" 'BEGIN{printf "%d\n", (100 - idle)}'
 }
 
-# Function to get memory usage (%)
-get_mem_usage() {
-    local mem=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
-    echo $(printf "%.0f" $mem)
+mem_usage() {
+  awk '/Mem:/ {printf "%d\n", ($3/$2)*100}' < <(free -m)
 }
 
-# Function to adjust INI file
-adjust_ini() {
-    local cpu=$1
-    local mem=$2
-    local changed=0
+cpu="$(cpu_usage)"
+mem="$(mem_usage)"
+log "CPU=${cpu}% MEM=${mem}%"
 
-    echo "$(date -Is) Checking INI file: $INI_FILE" >> "$LOG_FILE"
-    if [ $cpu -gt $THRESHOLD_CPU ] || [ $mem -gt $THRESHOLD_MEM ]; then
-        echo "$(date -Is) Threshold exceeded: CPU=$cpu%, MEM=$mem%" >> "$LOG_FILE"
-        if grep -q "threads =" "$INI_FILE"; then
-            local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
-            echo "$(date -Is) Current threads: $threads" >> "$LOG_FILE"
-            if [ $threads -gt 512 ]; then
-                threads=$((threads - 256))
-                echo "$(date -Is) Reducing threads to $threads" >> "$LOG_FILE"
-                sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
-                changed=1
-            else
-                echo "$(date -Is) Threads already at minimum ($threads)" >> "$LOG_FILE"
-            fi
-        else
-            echo "$(date -Is) threads= not found in $INI_FILE" >> "$LOG_FILE"
-        fi
-    else
-        echo "$(date -Is) No threshold exceeded: CPU=$cpu%, MEM=$mem%" >> "$LOG_FILE"
-    fi
-    return $changed
-}
-
-# Function to restart service
-restart_service() {
-    echo "$(date -Is) Restarting $SERVICE_NAME..." >> "$LOG_FILE"
-    systemctl restart "$SERVICE_NAME"
-}
-
-# Main monitoring loop
-while true; do
-    cpu=$(get_cpu_usage)
-    mem=$(get_mem_usage)
-    echo "$(date -Is) CPU: $cpu%, Memory: $mem%" >> "$LOG_FILE"
-
-    if [ $cpu -gt $THRESHOLD_CPU ] || [ $mem -gt $THRESHOLD_MEM ]; then
-        echo "$(date -Is) Resource threshold exceeded!" >> "$LOG_FILE"
-        if adjust_ini $cpu $mem; then
-            restart_service
-        fi
-    fi
-    sleep $CHECK_INTERVAL
-done
+if [[ -n "${SERVICE_NAME}" ]]; then
+  if (( cpu > THRESHOLD_CPU || mem > THRESHOLD_MEM )); then
+    log "THRESHOLD exceeded; restarting ${SERVICE_NAME}"
+    systemctl restart "${SERVICE_NAME}" || true
+  fi
+fi
 MONITOR_SCRIPT
+
 
 # --- Create systemd service ---
 echo "==> 21.1) Install systemd unit for resource monitor"
 cat <<'MONITOR_SERVICE' | cat_as_root /etc/systemd/system/resource-monitor.service 0644
 [Unit]
-Description=Resource Monitor for ${APP_NAME}
+Description=Resource Monitor (oneshot)
 After=network-online.target
 
 [Service]
-Type=simple
+Type=oneshot
 User=root
+Environment=THRESHOLD_CPU=85
+Environment=THRESHOLD_MEM=90
+Environment=SERVICE_NAME=
 ExecStart=/usr/local/bin/resource-monitor.sh
-Restart=on-failure
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=resource-monitor
 
-[Install]
-WantedBy=multi-user.target
 MONITOR_SERVICE
 
 # --- Create systemd timer ---
@@ -1217,10 +1180,4 @@ MONITOR_TIMER
 echo "==> 21.3) Enable and start resource monitor"
 systemctl daemon-reload
 systemctl enable --now resource-monitor.timer
-systemctl start resource-monitor.service
 
-# --- Log location ---
-echo "==> 21.4) Log file: ${LOG_FILE:-/var/log/resource-monitor.log}"
-touch /var/log/resource-monitor.log
-chown root:root /var/log/resource-monitor.log
-chmod 664 /var/log/resource-monitor.log
