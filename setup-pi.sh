@@ -1036,9 +1036,9 @@ REACH_FAIL_MAX="${REACH_FAIL_MAX:-12}" REACH_EVERY="${REACH_EVERY:-5m}" \
 #  echo "Skipping .deb install (APP_DEB_URL not set)"
 #fi
 
-echo "==> 16) Install ADSS (download installer, then run it)"
-# curl -sL https://raw.githubusercontent.com/it-army-ua-scripts/ADSS/install/install.sh  | bash -s
-echo "Files in ${ITARMY_INSTALLER_PATH}."
+echo "==> 16) Install mhddos (download installer, then run it)"
+# curl https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/download/mhddos_proxy_linux_arm64 -Lo mhddos_proxy_linux 
+echo "Files in the installer path ${ITARMY_INSTALLER_PATH}."
 echo
 ls -la "${ITARMY_INSTALLER_PATH}"
 echo
@@ -1046,10 +1046,26 @@ echo
 echo
 echo "[+] Installing from ${ITARMY_INSTALL_URL}"
 echo
-if ! curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s; then
-    echo "[-] ERROR: Installer failed. Check the output above."
+
+# Download the binary directly from the releases page
+echo "[+] Downloading mhddos_proxy_linux binary..."
+if ! curl -fsSL "https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/download/mhddos_proxy_linux_arm64" -o "${ITARMY_BIN}"; then
+    echo "[-] ERROR: Failed to download mhddos_proxy_linux binary. Check your internet connection."
     exit 1
 fi
+
+# Set executable permissions
+echo "[+] Setting executable permissions..."
+chmod +x "${ITARMY_BIN}"
+
+# Verify the binary
+if [[ ! -x "${ITARMY_BIN}" ]]; then
+    echo "[-] ERROR: Binary is not executable after download."
+    exit 1
+fi
+
+echo "[+] Successfully downloaded and configured mhddos_proxy_linux binary."
+
 ls -la "${ITARMY_INSTALLER_PATH}"
 ls -la /opt/itarmy/bin
 ls -la /usr/local/bin
