@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+!/usr/bin/env bash
 set -euo pipefail
 
 teardown_previous_install() {
@@ -229,9 +229,9 @@ echo "==> 2) Create mhddos.ini in user home directory"
 
 INI_PATH="/home/${SUDO_USER:-${USER}}/mhddos.ini"
 
-cat <<'EOF' > "${INI_PATH}"
+cat <<EOF > "${INI_PATH}"
 # Змінити мову | Change language (ua | en | es | de | pl | lt)
-lang = en
+lang = ${ITARMY_LANG}
 
 # Запуск декількох копій (auto для максимального значення, потрібно 3+ ядер процесору та стабільний інтернет)
 # Run multiple copies (set "auto" for max value, requires 3+ core CPU and stable network)
@@ -239,7 +239,7 @@ copies = 1
 
 # Кількість потоків на 1 копію | Number of threads per copy
 # Для активації приберіть символ # | Remove the # symbol to enable 
-threads = $(printf '%s' "$ITARMY_THREADS" | base64 -d)   
+threads = ${ITARMY_THREADS}
 
 # Атака через мій IP у % від 0 до 100 (обов'язковий VPN чи віддалений сервер)
 # Use my IP for the attack in % from 0 to 100 (requires VPN or remote server)
