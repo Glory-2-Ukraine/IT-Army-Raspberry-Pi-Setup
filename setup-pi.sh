@@ -94,6 +94,7 @@ APP_NICE="19"
 APP_DEADMAN_EVERY="6h"
 APP_HEARTBEAT_EVERY="5m"
 #APP_DEB_URL="${APP_DEB_URL:-https://github.com/it-army-ua-scripts/ITARMYkit/releases/latest/download/ITARMYkit-linux-arm64.deb}"
+#APP_DEB_URL="${APP_DEB_URL:-https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/}"
 IFACE="${IFACE:-wlan0}"
 COOLDOWN_S="${COOLDOWN_S:-180}"       # reconnect cooldown
 TIMER_SEC="${TIMER_SEC:-60}"          # watchdog cadence
@@ -108,7 +109,8 @@ REACH_HOST2="${REACH_HOST2:-8.8.8.8}"
 REACH_EVERY="${REACH_EVERY:-5m}"
 REACH_FAIL_MAX="${REACH_FAIL_MAX:-12}"
 # ---- ITARMY installer + runtime ----
-ITARMY_INSTALL_URL="${ITARMY_INSTALL_URL:-https://raw.githubusercontent.com/it-army-ua-scripts/ADSS/install/install.sh}"
+#ITARMY_INSTALL_URL="${ITARMY_INSTALL_URL:-https://raw.githubusercontent.com/it-army-ua-scripts/ADSS/install/install.sh}"
+ITARMY_INSTALL_URL="${ITARMY_INSTALL_URL:-https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/download/mhddos_proxy_linux_arm64}"
 ITARMY_INSTALLER_PATH="${ITARMY_INSTALLER_PATH:-/opt/itarmy/bin/}"
 ITARMY_BIN="/opt/itarmy/bin/mhddos_proxy_linux"
 ITARMY_LANG="${ITARMY_LANG:-en}"
@@ -190,7 +192,7 @@ if [[ "${INSTALL_TOOLS}" == "1" ]]; then
   apt-get install -y "${PKGS_OPS[@]}"
 fi
 
-echo "==> 1.2) Disable swap to prevent VM thrash"
+echo "==> 1.2) Disable swap to prevent Virtual Memory thrash"
 
 # If dphys-swapfile exists (older Raspberry Pi OS images), stop/disable it.
 if command -v dphys-swapfile >/dev/null 2>&1; then
@@ -228,6 +230,8 @@ systemctl try-restart sshd.service 2>/dev/null || true
 echo "==> 2) Create mhddos.ini in user home directory"
 
 INI_PATH="/home/${SUDO_USER:-${USER}}/mhddos.ini"
+echo
+echo "[+] The INI_PATH is ${INI_PATH}"
 
 cat <<EOF > "${INI_PATH}"
 # Змінити мову | Change language (ua | en | es | de | pl | lt)
@@ -254,7 +258,8 @@ chmod 0644 "${INI_PATH}"
 mkdir -p /opt/itarmy/bin
 cp "/home/${SUDO_USER:-${USER}}/mhddos.ini" /opt/itarmy/bin/
 
-
+echo "[+] The contents of ${INI_PATH} is:"
+cat ${INI_PATH}
 
 echo "==> 3) Create environment file for ${APP_NAME}"
 echo
