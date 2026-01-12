@@ -1130,49 +1130,82 @@ journalctl -u "${APP_NAME}.service" -n 50 --no-pager || true
 echo "==> 21) Install resource monitor + auto-adjuster for ${APP_NAME}"
 
 # --- Create resource-monitor.sh ---
-cat <<MONITOR_SCRIPT | cat_as_root /usr/local/bin/resource-monitor.sh 0755
+cat << 'MONITOR_SCRIPT' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Configuration
 INI_FILE="${ITARMY_INSTALLER_PATH}/mhddos.ini"
 SERVICE_NAME="${APP_NAME}"
-THRESHOLD_CPU=\${THRESHOLD_CPU:-${APP_CPU_QUOTA%\%}}  # Use tunable (20%)
-THRESHOLD_MEM=\${THRESHOLD_MEM:-${APP_MEM_MAX%M}}    # Use tunable (160M)
+THRESHOLD_CPU=${THRESHOLD_CPU:-${APP_CPU_QUOTA%\%}}  # Use tunable (20%)
+THRESHOLD_MEM=${THRESHOLD_MEM:-${APP_MEM_MAX%M}}     # Use tunable (160M)
 LOG_FILE="/var/log/resource-monitor.log"
 
-cpu_usage() {
-  local idle=\$(top -bn1 | awk -F',' '/Cpu\(s\)/{print \$4}' | awk '{print \$1}' | tr -d '%id' || echo 0)
-  awk -v idle="\$idle" 'BEGIN{printf "%d\n", (100 - idle)}'
+# Function to get CPU usage (1-minute average)
+get_cpu_usage() {
+    local cpu=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+    echo $(printf "%.0f" $cpu)
 }
 
-mem_usage() {
-  awk '/Mem:/ {printf "%d\n", (\$3/\$2)*100}' < <(free -m)
+# Function to get memory usage (%)
+get_mem_usage() {
+    local mem=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
+    echo $(printf "%.0f" $mem)
 }
 
+# Function to adjust mhddos.ini
 adjust_ini() {
-  local cpu=\$1
-  local mem=\$2
-  if [[ \$cpu -gt \$THRESHOLD_CPU ]] || [[ \$mem -gt \$THRESHOLD_MEM ]]; then
-    if grep -q "threads =" "\$INI_FILE"; then
-      local threads=\$(grep "threads =" "\$INI_FILE" | awk '{print \$3}')
-      if [[ \$threads -gt 512 ]]; then
-        threads=\$((threads - 256))
-        sed -i "s/threads = .*/threads = \$threads/" "\$INI_FILE"
-        systemctl restart "\$SERVICE_NAME"
-        echo "\$(date -Is) Reduced threads to \$threads" >> "\$LOG_FILE"
-      fi
+    local cpu=$1
+    local mem=$2
+    echo "$(date -Is) CPU=$cpu%, MEM=$mem%" >> "$LOG_FILE"
+
+    if [[ $cpu -gt $THRESHOLD_CPU ]] || [[ $mem -gt $THRESHOLD_MEM ]]; then
+        echo "$(date -Is) THRESHOLD EXCEEDED. Adjusting mhddos.ini..." >> "$LOG_FILE"
+
+        if grep -q "threads =" "$INI_FILE"; then
+            local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
+            echo "$(date -Is) Current threads: $threads" >> "$LOG_FILE"
+
+            if [[ $threads -gt 512 ]]; then
+                threads=$((threads - 256))
+                echo "$(date -Is) Reducing threads to $threads" >> "$LOG_FILE"
+                sudo sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
+                return 1  # Signal that a change was made
+            else
+                echo "$(date -Is) Threads already at minimum ($threads)" >> "$LOG_FILE"
+            fi
+        else
+            echo "$(date -Is) ERROR: 'threads =' not found in $INI_FILE" >> "$LOG_FILE"
+        fi
+    else
+        echo "$(date -Is) No threshold exceeded. No action taken." >> "$LOG_FILE"
     fi
-  fi
+    return 0
 }
 
-cpu=\$(cpu_usage)
-mem=\$(mem_usage)
-echo "\$(date -Is) CPU=\$cpu% MEM=\$mem%" >> "\$LOG_FILE"
-adjust_ini "\$cpu" "\$mem"
+# Function to restart the service
+restart_service() {
+    echo "$(date -Is) Restarting $SERVICE_NAME..." >> "$LOG_FILE"
+    sudo systemctl restart "$SERVICE_NAME"
+}
+
+# Main monitoring loop
+main() {
+    local cpu=$(get_cpu_usage)
+    local mem=$(get_mem_usage)
+    echo "$(date -Is) CPU: $cpu%, MEM: $mem%" >> "$LOG_FILE"
+
+    if adjust_ini "$cpu" "$mem"; then
+        restart_service
+    fi
+}
+
+main
 MONITOR_SCRIPT
 
 # --- Create systemd service ---
-cat <<MONITOR_SERVICE | cat_as_root /etc/systemd/system/resource-monitor.service 0644
+echo "==> 21.1) Install systemd unit for resource monitor"
+cat << MONITOR_SERVICE | cat_as_root /etc/systemd/system/resource-monitor.service 0644
 [Unit]
 Description=Resource Monitor for ${APP_NAME}
 After=network-online.target
@@ -1194,6 +1227,33 @@ SyslogIdentifier=resource-monitor
 WantedBy=multi-user.target
 MONITOR_SERVICE
 
+# --- Create systemd timer ---
+echo "==> 21.2) Install systemd timer for resource monitor"
+cat << MONITOR_TIMER | cat_as_root /etc/systemd/system/resource-monitor.timer 0644
+[Unit]
+Description=Run resource monitor every ${TIMER_SEC}s
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=${TIMER_SEC}s
+AccuracySec=5s
+Unit=resource-monitor.service
+
+[Install]
+WantedBy=timers.target
+MONITOR_TIMER
+
+# --- Enable and start ---
+echo "==> 21.3) Enable and start resource monitor"
+systemctl daemon-reload
+systemctl enable --now resource-monitor.timer
+systemctl start resource-monitor.service
+
+# --- Log location ---
+echo "==> 21.4) Log file: ${LOG_FILE:-/var/log/resource-monitor.log}"
+touch /var/log/resource-monitor.log
+chown root:root /var/log/resource-monitor.log
+chmod 664 /var/log/resource-monitor.log
 
 
 # --- Create systemd service ---
