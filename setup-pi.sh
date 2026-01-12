@@ -112,7 +112,8 @@ ITARMY_INSTALL_URL="${ITARMY_INSTALL_URL:-https://raw.githubusercontent.com/it-a
 ITARMY_INSTALLER_PATH="${ITARMY_INSTALLER_PATH:-/opt/itarmy/bin/}"
 ITARMY_BIN="${ITARMY_BIN:-/opt/itarmy/bin/mhddos_proxy_linux}"
 ITARMY_LANG="${ITARMY_LANG:-en}"
-ITARMY_USER_ID="${ITARMY_USER_ID:-5272237815}"
+# ITARMY_USER_ID="${ITARMY_USER_ID:-5272237815}"
+ITARMY_USER_ID="${ITARMY_USER_ID:-NTI3MjIzNzgxNQ==}"
 ITARMY_COPIES="${ITARMY_COPIES:-1}"
 ITARMY_THREADS="${ITARMY_THREADS:-512}"
 
@@ -238,17 +239,14 @@ copies = 1
 
 # Кількість потоків на 1 копію | Number of threads per copy
 # Для активації приберіть символ # | Remove the # symbol to enable 
-threads = 256
+threads = $(printf '%s' "$ITARMY_THREADS" | base64 -d)   
 
 # Атака через мій IP у % від 0 до 100 (обов'язковий VPN чи віддалений сервер)
 # Use my IP for the attack in % from 0 to 100 (requires VPN or remote server)
 use-my-ip = 0
 
-user-id = 5272237815 
+user-id = $(printf '%s' "$ITARMY_USER_ID" | base64 -d)
 
-# no-updates 
-# disable-gpu 
-# no-sandbox
 EOF
 
 chown "${SUDO_USER:-${USER}}":"${SUDO_USER:-${USER}}" "${INI_PATH}"
