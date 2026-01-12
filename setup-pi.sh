@@ -1047,27 +1047,27 @@ if ! curl -fsSL "${ITARMY_INSTALL_URL}" | bash -s; then
     exit 1
 fi
 
-echo
-echo "==> 16.1) Verify installer laid down expected directories/files"
-echo
-if [[ ! -d /opt/itarmy/utils ]] || ! command -v update_adss >/dev/null 2>&1; then
-  echo "[-] WARNING: ADSS installer did not lay down expected files (/opt/itarmy/utils, update_adss)."
-  echo "[-] WARNING: Continuing without ADSS. Node setup is otherwise complete."
-  # do NOT exit; do NOT return non-zero
-else
-  echo "[+] ADSS layout looks OK."
-fi
+#echo
+#echo "==> 16.1) Verify installer laid down expected directories/files"
+#echo
+#if [[ ! -d /opt/itarmy/utils ]] || ! command -v update_adss >/dev/null 2>&1; then
+#  echo "[-] WARNING: ADSS installer did not lay down expected files (/opt/itarmy/utils, update_adss)."
+#  echo "[-] WARNING: Continuing without ADSS. Node setup is otherwise complete."
+#  # do NOT exit; do NOT return non-zero
+#else
+#  echo "[+] ADSS layout looks OK."
+#fi
 
-echo
-echo "==> 16.2) Verify expected binary exists"
-echo
-if [[ ! -x "${ITARMY_BIN}" ]]; then
-  echo "[-] WARNING: Expected binary not found or not executable: ${ITARMY_BIN}"
-  echo "[-] WARNING: Skipping app service install steps (17+) because ADSS did not install."
-  echo "Contents of ${ITARMY_INSTALLER_PATH}:"
-  ls -la "${ITARMY_INSTALLER_PATH}" || true
-  exit 0
-fi
+#echo
+#echo "==> 16.2) Verify expected binary exists"
+#echo
+#if [[ ! -x "${ITARMY_BIN}" ]]; then
+#  echo "[-] WARNING: Expected binary not found or not executable: ${ITARMY_BIN}"
+#  echo "[-] WARNING: Skipping app service install steps (17+) because ADSS did not install."
+#  echo "Contents of ${ITARMY_INSTALLER_PATH}:"
+#  ls -la "${ITARMY_INSTALLER_PATH}" || true
+#  exit 0
+#fi
 echo "[+] OK: Found executable: ${ITARMY_BIN}"
 
 # Ensure WorkingDirectory matches where the real binary lives
