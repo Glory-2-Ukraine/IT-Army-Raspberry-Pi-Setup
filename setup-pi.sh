@@ -1184,26 +1184,104 @@ adjust_ini() {
             fi
         fi
 
+        # Reduce copies if possibleecho "==> 21) Install resource monitor + strict load limiter for ${APP_NAME}"
+
+# --- Create resource-monitor.sh ---
+cat << 'MONITOR_SCRIPT' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Configuration
+INI_FILE="${ITARMY_INSTALLER_PATH}/mhddos.ini"
+SERVICE_NAME="${APP_NAME}"
+MAX_LOAD=4.0                     # Hard cap for load average (15-min)
+THRESHOLD_CPU_HIGH=60            # Scale UP if CPU < 60%
+THRESHOLD_CPU_LOW=80             # Scale DOWN if CPU > 80%
+THRESHOLD_MEM_HIGH=70            # Scale DOWN if MEM > 70%
+LOG_FILE="/var/log/resource-monitor.log"
+MAX_THREADS=4096                 # Your max threads
+MIN_THREADS=256                  # Minimum threads
+MAX_COPIES=2                     # Conservative max copies (for load control)
+MIN_COPIES=1                     # Minimum copies
+
+# Function to get 15-minute load average
+get_load_avg() {
+    uptime | awk -F'load average: ' '{print $2}' | awk '{print $3}' | cut -d, -f1
+}
+
+# Function to get CPU usage (1-minute average)
+get_cpu_usage() {
+    local cpu=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+    echo $(printf "%.0f" $cpu)
+}
+
+# Function to get memory usage (%)
+get_mem_usage() {
+    local mem=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
+    echo $(printf "%.0f" $mem)
+}
+
+# Function to adjust mhddos.ini (scale UP or DOWN)
+adjust_ini() {
+    local load=$(get_load_avg)
+    local cpu=$1
+    local mem=$2
+    local changed=0
+
+    echo "$(date -Is) Load=$load, CPU=$cpu%, MEM=$mem%" >> "$LOG_FILE"
+
+    # HARD CAP: If load > 4.0, scale DOWN aggressively
+    if (( $(echo "$load > $MAX_LOAD" | bc -l) )); then
+        echo "$(date -Is) LOAD CAP EXCEEDED ($load > $MAX_LOAD). Scaling DOWN..." >> "$LOG_FILE"
+
+        # Reduce threads if possible
+        if grep -q "threads =" "$INI_FILE"; then
+            local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
+            if [[ $threads -gt $MIN_THREADS ]]; then
+                threads=$((threads - 1024))  # Aggressive reduction
+                threads=$((threads < MIN_THREADS ? MIN_THREADS : threads))
+                echo "$(date -Is) Reducing threads to $threads (load cap)" >> "$LOG_FILE"
+                sudo sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
+                changed=1
+            fi
+        fi
+
         # Reduce copies if possible
         if grep -q "copies =" "$INI_FILE"; then
             local copies=$(grep "copies =" "$INI_FILE" | awk '{print $3}')
             if [[ $copies -gt $MIN_COPIES ]]; then
                 copies=$((copies - 1))
-                echo "$(date -Is) Reducing copies to $copies" >> "$LOG_FILE"
+                echo "$(date -Is) Reducing copies to $copies (load cap)" >> "$LOG_FILE"
                 sudo sed -i "s/copies = .*/copies = $copies/" "$INI_FILE"
                 changed=1
             fi
         fi
 
-    # Scale UP if CPU < 50% AND MEM < 75%
-    elif [[ $cpu -lt $THRESHOLD_CPU_HIGH ]] && [[ $mem -lt $THRESHOLD_MEM_HIGH ]]; then
-        echo "$(date -Is) LOW LOAD DETECTED. Scaling UP..." >> "$LOG_FILE"
+    # Scale DOWN if CPU > 80% OR MEM > 70%
+    elif [[ $cpu -gt $THRESHOLD_CPU_LOW ]] || [[ $mem -gt $THRESHOLD_MEM_HIGH ]]; then
+        echo "$(date -Is) HIGH RESOURCE USAGE. Scaling DOWN..." >> "$LOG_FILE"
+
+        # Reduce threads if possible
+        if grep -q "threads =" "$INI_FILE"; then
+            local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
+            if [[ $threads -gt $MIN_THREADS ]]; then
+                threads=$((threads - 512))
+                threads=$((threads < MIN_THREADS ? MIN_THREADS : threads))
+                echo "$(date -Is) Reducing threads to $threads" >> "$LOG_FILE"
+                sudo sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
+                changed=1
+            fi
+        fi
+
+    # Scale UP if CPU < 60% AND MEM < 70% AND load < 2.0
+    elif [[ $cpu -lt $THRESHOLD_CPU_HIGH ]] && [[ $mem -lt $THRESHOLD_MEM_HIGH ]] && (( $(echo "$load < 2.0" | bc -l) )); then
+        echo "$(date -Is) LOW LOAD. Scaling UP conservatively..." >> "$LOG_FILE"
 
         # Increase threads if possible
         if grep -q "threads =" "$INI_FILE"; then
             local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
             if [[ $threads -lt $MAX_THREADS ]]; then
-                threads=$((threads + 512))  # Aggressive increase
+                threads=$((threads + 512))
                 threads=$((threads > MAX_THREADS ? MAX_THREADS : threads))
                 echo "$(date -Is) Increasing threads to $threads" >> "$LOG_FILE"
                 sudo sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
@@ -1211,7 +1289,7 @@ adjust_ini() {
             fi
         fi
 
-        # Increase copies if possible
+        # Increase copies if possible (conservative)
         if grep -q "copies =" "$INI_FILE"; then
             local copies=$(grep "copies =" "$INI_FILE" | awk '{print $3}')
             if [[ $copies -lt $MAX_COPIES ]]; then
@@ -1222,7 +1300,7 @@ adjust_ini() {
             fi
         fi
     else
-        echo "$(date -Is) No action taken (CPU=$cpu%, MEM=$mem%)" >> "$LOG_FILE"
+        echo "$(date -Is) No action taken (Load=$load, CPU=$cpu%, MEM=$mem%)" >> "$LOG_FILE"
     fi
 
     return $changed
@@ -1238,7 +1316,6 @@ restart_service() {
 main() {
     local cpu=$(get_cpu_usage)
     local mem=$(get_mem_usage)
-
     if adjust_ini "$cpu" "$mem"; then
         restart_service
     fi
@@ -1259,9 +1336,6 @@ Type=simple
 User=root
 Environment=INI_FILE=${ITARMY_INSTALLER_PATH}/mhddos.ini
 Environment=SERVICE_NAME=${APP_NAME}
-Environment=THRESHOLD_CPU_HIGH=50
-Environment=THRESHOLD_CPU_LOW=85
-Environment=THRESHOLD_MEM_HIGH=75
 ExecStart=/usr/local/bin/resource-monitor.sh
 Restart=on-failure
 StandardOutput=journal
@@ -1299,4 +1373,3 @@ echo "==> 21.4) Log file: ${LOG_FILE:-/var/log/resource-monitor.log}"
 touch /var/log/resource-monitor.log
 chown root:root /var/log/resource-monitor.log
 chmod 664 /var/log/resource-monitor.log
-
