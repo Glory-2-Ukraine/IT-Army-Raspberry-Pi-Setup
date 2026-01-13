@@ -1127,6 +1127,8 @@ systemctl is-enabled "${APP_NAME}.service" --quiet && echo "OK: enabled" || echo
 systemctl is-active  "${APP_NAME}.service" --quiet && echo "OK: active"  || echo "WARN: not active"
 journalctl -u "${APP_NAME}.service" -n 50 --no-pager || true
 
+##################################################################################################################################################
+
 echo "==> 21) Install resource monitor + auto-scaler for ${APP_NAME}"
 
 # --- Create resource-monitor.sh ---
@@ -1137,14 +1139,14 @@ set -euo pipefail
 # Configuration
 INI_FILE="${ITARMY_INSTALLER_PATH}/mhddos.ini"
 SERVICE_NAME="${APP_NAME}"
-THRESHOLD_CPU_HIGH=${THRESHOLD_CPU_HIGH:-70}   # Scale UP if CPU < 70%
-THRESHOLD_CPU_LOW=${THRESHOLD_CPU_LOW:-90}    # Scale DOWN if CPU > 90%
-THRESHOLD_MEM_HIGH=${THRESHOLD_MEM_HIGH:-80}  # Scale DOWN if MEM > 80%
+THRESHOLD_CPU_HIGH=${THRESHOLD_CPU_HIGH:-50}   # Scale UP if CPU < 50%
+THRESHOLD_CPU_LOW=${THRESHOLD_CPU_LOW:-85}    # Scale DOWN if CPU > 85%
+THRESHOLD_MEM_HIGH=${THRESHOLD_MEM_HIGH:-75}  # Scale DOWN if MEM > 75%
 LOG_FILE="/var/log/resource-monitor.log"
-MAX_THREADS=4096  # Absolute max threads per copy
-MIN_THREADS=256   # Absolute min threads per copy
-MAX_COPIES=4      # Absolute max copies (for 4-core Pi)
-MIN_COPIES=1      # Absolute min copies
+MAX_THREADS=4096  # Your new max threads
+MIN_THREADS=256   # Minimum threads
+MAX_COPIES=4      # Max copies for 4-core Pi
+MIN_COPIES=1      # Minimum copies
 
 # Function to get CPU usage (1-minute average)
 get_cpu_usage() {
@@ -1166,7 +1168,7 @@ adjust_ini() {
 
     echo "$(date -Is) CPU=$cpu%, MEM=$mem%" >> "$LOG_FILE"
 
-    # Scale DOWN if CPU > 90% OR MEM > 80%
+    # Scale DOWN if CPU > 85% OR MEM > 75%
     if [[ $cpu -gt $THRESHOLD_CPU_LOW ]] || [[ $mem -gt $THRESHOLD_MEM_HIGH ]]; then
         echo "$(date -Is) HIGH LOAD DETECTED. Scaling DOWN..." >> "$LOG_FILE"
 
@@ -1174,7 +1176,7 @@ adjust_ini() {
         if grep -q "threads =" "$INI_FILE"; then
             local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
             if [[ $threads -gt $MIN_THREADS ]]; then
-                threads=$((threads - 256))
+                threads=$((threads - 512))  # Aggressive reduction
                 threads=$((threads < MIN_THREADS ? MIN_THREADS : threads))
                 echo "$(date -Is) Reducing threads to $threads" >> "$LOG_FILE"
                 sudo sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
@@ -1193,7 +1195,7 @@ adjust_ini() {
             fi
         fi
 
-    # Scale UP if CPU < 70% AND MEM < 80%
+    # Scale UP if CPU < 50% AND MEM < 75%
     elif [[ $cpu -lt $THRESHOLD_CPU_HIGH ]] && [[ $mem -lt $THRESHOLD_MEM_HIGH ]]; then
         echo "$(date -Is) LOW LOAD DETECTED. Scaling UP..." >> "$LOG_FILE"
 
@@ -1201,7 +1203,7 @@ adjust_ini() {
         if grep -q "threads =" "$INI_FILE"; then
             local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
             if [[ $threads -lt $MAX_THREADS ]]; then
-                threads=$((threads + 256))
+                threads=$((threads + 512))  # Aggressive increase
                 threads=$((threads > MAX_THREADS ? MAX_THREADS : threads))
                 echo "$(date -Is) Increasing threads to $threads" >> "$LOG_FILE"
                 sudo sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
@@ -1257,9 +1259,9 @@ Type=simple
 User=root
 Environment=INI_FILE=${ITARMY_INSTALLER_PATH}/mhddos.ini
 Environment=SERVICE_NAME=${APP_NAME}
-Environment=THRESHOLD_CPU_HIGH=70
-Environment=THRESHOLD_CPU_LOW=90
-Environment=THRESHOLD_MEM_HIGH=80
+Environment=THRESHOLD_CPU_HIGH=50
+Environment=THRESHOLD_CPU_LOW=85
+Environment=THRESHOLD_MEM_HIGH=75
 ExecStart=/usr/local/bin/resource-monitor.sh
 Restart=on-failure
 StandardOutput=journal
@@ -1297,5 +1299,4 @@ echo "==> 21.4) Log file: ${LOG_FILE:-/var/log/resource-monitor.log}"
 touch /var/log/resource-monitor.log
 chown root:root /var/log/resource-monitor.log
 chmod 664 /var/log/resource-monitor.log
-
 
