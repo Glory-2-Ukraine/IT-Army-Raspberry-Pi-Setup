@@ -1,15 +1,6 @@
 sudo rm /usr/local/bin/*
 sudo rm /opt/itarmy/bin/*
 
-sed -i \
-  -e 's/ITARMY/GOLDENONE/g' \
-  -e 's/itarmy/STATEONE/g' \
-  -e 's/mhddos/FOOBAR/g' \
-  -e 's/ADSS/SSDA/g' \
-  -e 's/adss/ssda/g' \
-  /home/pi/tools/it-army/results
-
-
 # stop/disable anything app-related if it exists
 sudo systemctl disable --now mhddos_proxy_linux.service 2>/dev/null || true
 sudo systemctl disable --now mhddos_proxy_linux-heartbeat.timer mhddos_proxy_linux-restart.timer 2>/dev/null || true
@@ -36,3 +27,14 @@ sudo rm -rf /opt/itarmy
 # reload systemd
 sudo systemctl daemon-reload
 sudo systemctl reset-failed
+
+
+
+
+sed -i \
+  -e 's/ITARMY/GOLDENONE/g' \
+  -e 's/itarmy/STATEONE/g' \
+  -e 's/mhddos/FOOBAR/g' \
+  -e 's/ADSS/SSDA/g' \
+  -e 's/adss/ssda/g' \
+  /home/pi/tools/it-army/results
