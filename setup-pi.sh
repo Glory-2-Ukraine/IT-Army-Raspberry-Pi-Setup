@@ -1127,7 +1127,7 @@ systemctl is-enabled "${APP_NAME}.service" --quiet && echo "OK: enabled" || echo
 systemctl is-active  "${APP_NAME}.service" --quiet && echo "OK: active"  || echo "WARN: not active"
 journalctl -u "${APP_NAME}.service" -n 50 --no-pager || true
 
-echo "==> 21) Install resource monitor + auto-adjuster for ${APP_NAME}"
+echo "==> 21) Install resource monitor + auto-scaler for ${APP_NAME}"
 
 # --- Create resource-monitor.sh ---
 cat << 'MONITOR_SCRIPT' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
@@ -1137,9 +1137,14 @@ set -euo pipefail
 # Configuration
 INI_FILE="${ITARMY_INSTALLER_PATH}/mhddos.ini"
 SERVICE_NAME="${APP_NAME}"
-THRESHOLD_CPU=${THRESHOLD_CPU:-${APP_CPU_QUOTA%\%}}  # Use tunable (20%)
-THRESHOLD_MEM=${THRESHOLD_MEM:-${APP_MEM_MAX%M}}     # Use tunable (160M)
+THRESHOLD_CPU_HIGH=${THRESHOLD_CPU_HIGH:-70}   # Scale UP if CPU < 70%
+THRESHOLD_CPU_LOW=${THRESHOLD_CPU_LOW:-90}    # Scale DOWN if CPU > 90%
+THRESHOLD_MEM_HIGH=${THRESHOLD_MEM_HIGH:-80}  # Scale DOWN if MEM > 80%
 LOG_FILE="/var/log/resource-monitor.log"
+MAX_THREADS=2048  # Absolute max threads per copy
+MIN_THREADS=256   # Absolute min threads per copy
+MAX_COPIES=4      # Absolute max copies (for 4-core Pi)
+MIN_COPIES=1      # Absolute min copies
 
 # Function to get CPU usage (1-minute average)
 get_cpu_usage() {
@@ -1153,34 +1158,72 @@ get_mem_usage() {
     echo $(printf "%.0f" $mem)
 }
 
-# Function to adjust mhddos.ini
+# Function to adjust mhddos.ini (scale UP or DOWN)
 adjust_ini() {
     local cpu=$1
     local mem=$2
+    local changed=0
+
     echo "$(date -Is) CPU=$cpu%, MEM=$mem%" >> "$LOG_FILE"
 
-    if [[ $cpu -gt $THRESHOLD_CPU ]] || [[ $mem -gt $THRESHOLD_MEM ]]; then
-        echo "$(date -Is) THRESHOLD EXCEEDED. Adjusting mhddos.ini..." >> "$LOG_FILE"
+    # Scale DOWN if CPU > 90% OR MEM > 80%
+    if [[ $cpu -gt $THRESHOLD_CPU_LOW ]] || [[ $mem -gt $THRESHOLD_MEM_HIGH ]]; then
+        echo "$(date -Is) HIGH LOAD DETECTED. Scaling DOWN..." >> "$LOG_FILE"
 
+        # Reduce threads if possible
         if grep -q "threads =" "$INI_FILE"; then
             local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
-            echo "$(date -Is) Current threads: $threads" >> "$LOG_FILE"
-
-            if [[ $threads -gt 512 ]]; then
+            if [[ $threads -gt $MIN_THREADS ]]; then
                 threads=$((threads - 256))
+                threads=$((threads < MIN_THREADS ? MIN_THREADS : threads))
                 echo "$(date -Is) Reducing threads to $threads" >> "$LOG_FILE"
                 sudo sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
-                return 1  # Signal that a change was made
-            else
-                echo "$(date -Is) Threads already at minimum ($threads)" >> "$LOG_FILE"
+                changed=1
             fi
-        else
-            echo "$(date -Is) ERROR: 'threads =' not found in $INI_FILE" >> "$LOG_FILE"
+        fi
+
+        # Reduce copies if possible
+        if grep -q "copies =" "$INI_FILE"; then
+            local copies=$(grep "copies =" "$INI_FILE" | awk '{print $3}')
+            if [[ $copies -gt $MIN_COPIES ]]; then
+                copies=$((copies - 1))
+                echo "$(date -Is) Reducing copies to $copies" >> "$LOG_FILE"
+                sudo sed -i "s/copies = .*/copies = $copies/" "$INI_FILE"
+                changed=1
+            fi
+        fi
+
+    # Scale UP if CPU < 70% AND MEM < 80%
+    elif [[ $cpu -lt $THRESHOLD_CPU_HIGH ]] && [[ $mem -lt $THRESHOLD_MEM_HIGH ]]; then
+        echo "$(date -Is) LOW LOAD DETECTED. Scaling UP..." >> "$LOG_FILE"
+
+        # Increase threads if possible
+        if grep -q "threads =" "$INI_FILE"; then
+            local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
+            if [[ $threads -lt $MAX_THREADS ]]; then
+                threads=$((threads + 256))
+                threads=$((threads > MAX_THREADS ? MAX_THREADS : threads))
+                echo "$(date -Is) Increasing threads to $threads" >> "$LOG_FILE"
+                sudo sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
+                changed=1
+            fi
+        fi
+
+        # Increase copies if possible
+        if grep -q "copies =" "$INI_FILE"; then
+            local copies=$(grep "copies =" "$INI_FILE" | awk '{print $3}')
+            if [[ $copies -lt $MAX_COPIES ]]; then
+                copies=$((copies + 1))
+                echo "$(date -Is) Increasing copies to $copies" >> "$LOG_FILE"
+                sudo sed -i "s/copies = .*/copies = $copies/" "$INI_FILE"
+                changed=1
+            fi
         fi
     else
-        echo "$(date -Is) No threshold exceeded. No action taken." >> "$LOG_FILE"
+        echo "$(date -Is) No action taken (CPU=$cpu%, MEM=$mem%)" >> "$LOG_FILE"
     fi
-    return 0
+
+    return $changed
 }
 
 # Function to restart the service
@@ -1193,7 +1236,6 @@ restart_service() {
 main() {
     local cpu=$(get_cpu_usage)
     local mem=$(get_mem_usage)
-    echo "$(date -Is) CPU: $cpu%, MEM: $mem%" >> "$LOG_FILE"
 
     if adjust_ini "$cpu" "$mem"; then
         restart_service
@@ -1215,8 +1257,9 @@ Type=simple
 User=root
 Environment=INI_FILE=${ITARMY_INSTALLER_PATH}/mhddos.ini
 Environment=SERVICE_NAME=${APP_NAME}
-Environment=THRESHOLD_CPU=${APP_CPU_QUOTA%\%}
-Environment=THRESHOLD_MEM=${APP_MEM_MAX%M}
+Environment=THRESHOLD_CPU_HIGH=70
+Environment=THRESHOLD_CPU_LOW=90
+Environment=THRESHOLD_MEM_HIGH=80
 ExecStart=/usr/local/bin/resource-monitor.sh
 Restart=on-failure
 StandardOutput=journal
@@ -1255,42 +1298,4 @@ touch /var/log/resource-monitor.log
 chown root:root /var/log/resource-monitor.log
 chmod 664 /var/log/resource-monitor.log
 
-
-# --- Create systemd service ---
-echo "==> 21.1) Install systemd unit for resource monitor"
-cat <<'MONITOR_SERVICE' | cat_as_root /etc/systemd/system/resource-monitor.service 0644
-[Unit]
-Description=Resource Monitor (oneshot)
-After=network-online.target
-
-[Service]
-Type=oneshot
-User=root
-Environment=THRESHOLD_CPU=85
-Environment=THRESHOLD_MEM=90
-Environment=SERVICE_NAME=
-ExecStart=/usr/local/bin/resource-monitor.sh
-
-MONITOR_SERVICE
-
-# --- Create systemd timer ---
-echo "==> 21.2) Install systemd timer for resource monitor"
-cat <<'MONITOR_TIMER' | cat_as_root /etc/systemd/system/resource-monitor.timer 0644
-[Unit]
-Description=Run resource monitor every minute
-
-[Timer]
-OnBootSec=30s
-OnUnitActiveSec=60s
-AccuracySec=5s
-Unit=resource-monitor.service
-
-[Install]
-WantedBy=timers.target
-MONITOR_TIMER
-
-# --- Enable and start ---
-echo "==> 21.3) Enable and start resource monitor"
-systemctl daemon-reload
-systemctl enable --now resource-monitor.timer
 
