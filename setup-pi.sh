@@ -109,15 +109,13 @@ REACH_HOST2="${REACH_HOST2:-8.8.8.8}"
 REACH_EVERY="${REACH_EVERY:-5m}"
 REACH_FAIL_MAX="${REACH_FAIL_MAX:-12}"
 # ---- ITARMY installer + runtime ----
-#ITARMY_INSTALL_URL="${ITARMY_INSTALL_URL:-https://raw.githubusercontent.com/it-army-ua-scripts/ADSS/install/install.sh}"
 ITARMY_INSTALL_URL="${ITARMY_INSTALL_URL:-https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/download/mhddos_proxy_linux_arm64}"
 ITARMY_INSTALLER_PATH="${ITARMY_INSTALLER_PATH:-/opt/itarmy/bin/}"
 ITARMY_BIN="/opt/itarmy/bin/mhddos_proxy_linux"
 ITARMY_LANG="${ITARMY_LANG:-en}"
-# ITARMY_USER_ID="${ITARMY_USER_ID:-5272237815}"
 ITARMY_USER_ID="${ITARMY_USER_ID:-NTI3MjIzNzgxNQ==}"
 ITARMY_COPIES="${ITARMY_COPIES:-1}"
-ITARMY_THREADS="${ITARMY_THREADS:-512}"
+ITARMY_THREADS="${ITARMY_THREADS:-2048}"
 
 
 need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; exit 1; }; }
@@ -219,7 +217,7 @@ cat >/etc/systemd/system/ssh.service.d/10-priority.conf <<'EOF'
 [Service]
 CPUWeight=1000
 IOWeight=1000
-Nice=-5
+Nice=-19
 EOF
 
 systemctl daemon-reload
