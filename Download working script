@@ -1,2 +1,3 @@
 curl -fsSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/main/setup-pi.sh -o ~/setup-pi.sh
 chmod +x ~/setup-pi.sh
+sudo ./setup-pi.sh
