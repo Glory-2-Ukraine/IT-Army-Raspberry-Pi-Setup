@@ -1292,10 +1292,10 @@ WantedBy=timers.target
 MONITOR_TIMER
 
 # --- Enable and start ---
-echo "==> 21.3) Enable and start resource monitor"
-systemctl daemon-reload
-systemctl enable --now resource-monitor.timer
-systemctl start resource-monitor.service
+#echo "==> 21.3) Enable and start resource monitor"
+#systemctl daemon-reload
+#systemctl enable --now resource-monitor.timer
+#systemctl start resource-monitor.service
 
 # --- Log location ---
 echo "==> 21.4) Log file: ${LOG_FILE:-/var/log/resource-monitor.log}"
