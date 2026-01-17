@@ -7,4 +7,4 @@ chmod +x mhddos_proxy_linux
 
 curl https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/download/mhddos_proxy_linux -Lo mhddos_proxy_linux
 chmod +x mhddos_proxy_linux
-./mhddos_proxy_linux --lang en --copies 64 --threads 8192 --user-id $(echo "NTI3MjIzNzgxNQ==" | base64 --decode)
+./mhddos_proxy_linux --lang en --copies 64 --threads 81920 --user-id $(echo "NTI3MjIzNzgxNQ==" | base64 --decode)
