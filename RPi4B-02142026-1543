@@ -1,0 +1,444 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# =========================
+# MHDDOS Raspberry Pi 4B Optimized Setup
+# Features:
+# - Dynamic resource monitoring (CPU, Mem, Temp, Network)
+# - Time-based throttling (full throttle midnight-6am)
+# - Absolute priority for SSH and Pi Connect
+# - Network watchdog and QoS
+# - Crash protection and auto-restart
+# =========================
+
+# ---- Tunables ----
+INSTALL_HARDENED_APP=1
+APP_NAME="mhddos_proxy_linux"
+APP_USER="pi"
+START_SCRIPT="${APP_NAME}-worker.sh"
+APP_EXECSTART="/usr/local/bin/${START_SCRIPT}"
+APP_ENV_FILE="/etc/default/${APP_NAME}"
+APP_WORKDIR="/opt/itarmy/bin"
+
+# Resource limits
+APP_CPU_QUOTA_DAY="40%"      # Daytime CPU limit
+APP_CPU_QUOTA_NIGHT="80%"    # Nighttime CPU limit (midnight-6am)
+APP_MEM_MAX="768M"           # Memory limit
+APP_NICE="19"                # Nice value
+APP_DEADMAN_EVERY="6h"       # Deadman timer
+APP_HEARTBEAT_EVERY="5m"     # Heartbeat timer
+
+# Network
+IFACE="${IFACE:-wlan0}"
+LAN_SSH_CLIENT="192.168.1.0/24"  # Your local network for SSH priority
+COOLDOWN_S=180                 # Reconnect cooldown
+TIMER_SEC=15                  # Watchdog check interval
+GW_MISS_MAX=3                 # Gateway miss threshold
+
+# Thresholds
+MAX_LOAD=4.0                  # Max 15-min load average
+MAX_TEMP=70                   # Max CPU temp in Celsius
+MAX_CPU_DAY=60                # Max CPU% during day
+MAX_CPU_NIGHT=90              # Max CPU% during night
+MAX_MEM=85                    # Max memory usage %
+MAX_NET_LATENCY=200           # Max ping latency to gateway (ms)
+
+# Time window for full throttle (midnight-6am)
+FULL_THROTTLE_START="00:00"
+FULL_THROTTLE_END="06:00"
+
+# ---- ITARMY installer + runtime ----
+ITARMY_INSTALL_URL="${ITARMY_INSTALL_URL:-https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/download/mhddos_proxy_linux_arm64}"
+ITARMY_INSTALLER_PATH="${ITARMY_INSTALLER_PATH:-/opt/itarmy/bin/}"
+ITARMY_BIN="/opt/itarmy/bin/mhddos_proxy_linux"
+ITARMY_LANG="${ITARMY_LANG:-en}"
+ITARMY_USER_ID="${ITARMY_USER_ID:-NTI3MjIzNzgxNQ==}"
+ITARMY_COPIES="${ITARMY_COPIES:-1}"
+ITARMY_THREADS="${ITARMY_THREADS:-2048}"
+
+# ---- End Tunables ----
+
+need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; exit 1; }; }
+backup_if_exists() { local f="$1"; [[ -e "$f" ]] && cp -a "$f" "${f}.BACKUP.$(date +%Y%m%d-%H%M%S)"; }
+cat_as_root() { local path="$1" mode="${2:-0644}"; tee "$path" >/dev/null; chown root:root "$path"; chmod "$mode" "$path"; }
+
+# =========================
+# 1. Base Setup
+# =========================
+echo "==> 1) Installing base packages and dependencies"
+apt-get update -y
+apt-get install -y ca-certificates curl iproute2 iputils-ping network-manager htop lm-sensors iotop iftop jq bc
+
+# =========================
+# 2. Create mhddos.ini with time-aware settings
+# =========================
+echo "==> 2) Creating time-aware mhddos.ini"
+INI_PATH="/opt/itarmy/bin/mhddos.ini"
+mkdir -p "$(dirname "$INI_PATH")"
+
+# Initial conservative settings (will be adjusted by monitor)
+cat <<EOF | cat_as_root "$INI_PATH" 0644
+# Змінити мову | Change language (ua | en | es | de | pl | lt)
+lang = ${ITARMY_LANG}
+
+# Запуск декількох копій (auto для максимального значення, потрібно 3+ ядер процесору та стабільний інтернет)
+# Run multiple copies (set "auto" for max value, requires 3+ core CPU and stable network)
+copies = ${ITARMY_COPIES}
+
+# Кількість потоків на 1 копію | Number of threads per copy
+# Для активації приберіть символ # | Remove the # symbol to enable 
+threads = ${ITARMY_THREADS}
+
+# Атака через мій IP у % від 0 до 100 (обов'язковий VPN чи віддалений сервер)
+# Use my IP for the attack in % from 0 to 100 (requires VPN or remote server)
+use-my-ip = 0
+
+user-id = $(printf '%s' "$ITARMY_USER_ID" | base64 -d)
+EOF
+
+# =========================
+# 3. Create worker wrapper with QoS marking
+# =========================
+echo "==> 3) Creating worker wrapper with traffic marking"
+cat <<'WORKER_SCRIPT' | cat_as_root "$APP_EXECSTART" 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Mark packets for QoS
+iptables -t mangle -A OUTPUT -m owner --uid-owner $(id -u) -j MARK --set-mark 1 2>/dev/null || true
+
+# Start the worker
+exec /opt/itarmy/bin/mhddos_proxy_linux
+WORKER_SCRIPT
+
+# =========================
+# 4. Install Network Watchdog
+# =========================
+echo "==> 4) Installing network watchdog"
+cat <<'WATCHDOG_SCRIPT' | cat_as_root /usr/local/bin/net-watchdog.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Network quality monitoring
+check_network_quality() {
+    local gw=$(ip route | awk '/default/ {print $3}')
+    local latency=$(ping -c 3 "$gw" | tail -1 | awk -F'/' '{print $5}' | cut -d. -f1)
+    if [[ "$latency" -gt "$MAX_NET_LATENCY" ]]; then
+        logger -t net-watchdog "High latency detected: ${latency}ms > ${MAX_NET_LATENCY}ms"
+        return 1
+    fi
+    return 0
+}
+
+# Main watchdog logic
+main() {
+    if ! check_network_quality; then
+        systemctl restart NetworkManager
+        sleep 5
+    fi
+}
+main
+WATCHDOG_SCRIPT
+
+# Systemd unit for watchdog
+cat <<EOF | cat_as_root /etc/systemd/system/net-watchdog.service 0644
+[Unit]
+Description=Network Watchdog
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/net-watchdog.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl enable --now net-watchdog.service
+
+# =========================
+# 5. Install QoS Rules (SSH Priority)
+# =========================
+echo "==> 5) Setting up QoS rules for SSH priority"
+cat <<'QOS_SCRIPT' | cat_as_root /usr/local/bin/setup-qos.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+IFACE="$1"
+modprobe ifb
+ip link add ifb0 type ifb
+ip link set ifb0 up
+
+# Clear existing rules
+tc qdisc del dev "$IFACE" root 2>/dev/null || true
+
+# Create QoS structure
+tc qdisc add dev "$IFACE" root handle 1: htb default 30
+
+# High priority class for SSH (1:10)
+tc class add dev "$IFACE" parent 1: classid 1:10 htb rate 10mbit ceil 20mbit prio 0
+tc qdisc add dev "$IFACE" parent 1:10 handle 110: fq_codel
+
+# Low priority class for MHDDOS (1:20)
+tc class add dev "$IFACE" parent 1: classid 1:20 htb rate 1mbit ceil 5mbit prio 7
+tc qdisc add dev "$IFACE" parent 1:20 handle 120: fq_codel
+
+# Default class (1:30)
+tc class add dev "$IFACE" parent 1: classid 1:30 htb rate 5mbit ceil 20mbit prio 3
+tc qdisc add dev "$IFACE" parent 1:30 handle 130: fq_codel
+
+# Match SSH traffic (high priority)
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip dport 22 0xffff flowid 1:10
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip sport 22 0xffff flowid 1:10
+
+# Match MHDDOS traffic (low priority, marked with fwmark 1)
+tc filter add dev "$IFACE" protocol ip parent 1: prio 2 handle 1 fw flowid 1:20
+QOS_SCRIPT
+
+# Apply QoS rules
+/usr/local/bin/setup-qos.sh "$IFACE"
+
+# =========================
+# 6. Install Resource Monitor with Time Awareness
+# =========================
+echo "==> 6) Installing comprehensive resource monitor"
+cat <<'MONITOR_SCRIPT' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Configuration
+INI_FILE="/opt/itarmy/bin/mhddos.ini"
+SERVICE_NAME="mhddos_proxy_linux"
+SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service.d/90-dynamic-limits.conf"
+LOG_FILE="/var/log/resource-monitor.log"
+MAX_LOAD=4.0
+MAX_TEMP=70
+MAX_NET_LATENCY=200
+
+# Get current time and determine if it's "night time" (full throttle)
+is_night_time() {
+    local now=$(date +%H:%M)
+    [[ "$now" > "$FULL_THROTTLE_START" ]] || [[ "$now" < "$FULL_THROTTLE_END" ]]
+}
+
+# Get system metrics
+get_metrics() {
+    local load=$(uptime | awk -F'load average: ' '{print $2}' | awk '{print $3}' | cut -d, -f1)
+    local cpu=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+    local mem=$(free | awk '/Mem:/ {printf "%.0f", $3/$2 * 100}')
+    local temp=$(cat /sys/class/thermal/thermal_zone0/temp | awk '{print $1/1000}')
+    local latency=$(ping -c 3 $(ip route | awk '/default/ {print $3}') | tail -1 | awk -F'/' '{print $5}' | cut -d. -f1)
+
+    echo "$load $cpu $mem $temp $latency"
+}
+
+# Update systemd limits
+update_limits() {
+    local cpu_quota=$1
+    local mem_max=$2
+
+    echo "[Service]" | cat_as_root "$SERVICE_UNIT" 0644
+    echo "CPUQuota=$cpu_quota" | cat_as_root "$SERVICE_UNIT" 0664 --append
+    echo "MemoryMax=$mem_max" | cat_as_root "$SERVICE_UNIT" 0664 --append
+    echo "Nice=19" | cat_as_root "$SERVICE_UNIT" 0664 --append
+    systemctl daemon-reload
+}
+
+# Adjust settings based on metrics
+adjust_settings() {
+    read load cpu mem temp latency <<< $(get_metrics)
+    local changed=0
+    local night_time=$(is_night_time && echo "1" || echo "0")
+
+    echo "$(date -Is) Load=$load, CPU=$cpu%, MEM=$mem%, Temp=${temp}C, Latency=${latency}ms" >> "$LOG_FILE"
+
+    # EMERGENCY: If any critical threshold exceeded
+    if (( $(echo "$load > $MAX_LOAD" | bc -l) )) || \
+       (( $(echo "$temp > $MAX_TEMP" | bc -l) )) || \
+       (( $(echo "$latency > $MAX_NET_LATENCY" | bc -l) )); then
+        echo "$(date -Is) EMERGENCY: Threshold exceeded. Scaling DOWN!" >> "$LOG_FILE"
+
+        # Reduce to minimum settings
+        sudo sed -i "s/threads = .*/threads = 128/" "$INI_FILE"
+        sudo sed -i "s/copies = .*/copies = 1/" "$INI_FILE"
+
+        # Set minimum systemd limits
+        update_limits "20%" "256M"
+        changed=1
+    else
+        # Time-based settings
+        if [[ "$night_time" -eq 1 ]]; then
+            # Night time: Full throttle
+            max_cpu=90
+            max_threads=4096
+            max_mem="768M"
+        else
+            # Day time: Conservative
+            max_cpu=60
+            max_threads=2048
+            max_mem="512M"
+        fi
+
+        # Scale based on current usage
+        if (( $(echo "$cpu > $max_cpu" | bc -l) )) || (( $(echo "$mem > 85" | bc -l) )); then
+            echo "$(date -Is) High resource usage. Scaling DOWN..." >> "$LOG_FILE"
+
+            # Reduce threads
+            local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
+            if [[ $threads -gt 256 ]]; then
+                threads=$((threads - 256))
+                sudo sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
+                changed=1
+            fi
+
+            # Reduce systemd CPU quota
+            local current_quota=$(grep "CPUQuota=" "$SERVICE_UNIT" 2>/dev/null | awk -F= '{print $2}' | tr -d '%')
+            if [[ -n "$current_quota" ]] && [[ $current_quota -gt 20 ]]; then
+                new_quota=$((current_quota - 10))
+                update_limits "${new_quota}%" "$max_mem"
+                changed=1
+            fi
+        elif (( $(echo "$cpu < $((max_cpu-20))" | bc -l) )) && \
+             (( $(echo "$mem < 70" | bc -l) )) && \
+             (( $(echo "$load < 2.0" | bc -l) )); then
+            echo "$(date -Is) Low resource usage. Scaling UP..." >> "$LOG_FILE"
+
+            # Increase threads
+            local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
+            if [[ $threads -lt $max_threads ]]; then
+                threads=$((threads + 256))
+                sudo sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
+                changed=1
+            fi
+
+            # Increase systemd CPU quota
+            local current_quota=$(grep "CPUQuota=" "$SERVICE_UNIT" 2>/dev/null | awk -F= '{print $2}' | tr -d '%')
+            if [[ -n "$current_quota" ]] && [[ $current_quota -lt $((max_cpu-10)) ]]; then
+                new_quota=$((current_quota + 10))
+                update_limits "${new_quota}%" "$max_mem"
+                changed=1
+            fi
+        fi
+    fi
+
+    return $changed
+}
+
+# Main monitoring loop
+main() {
+    if adjust_settings; then
+        echo "$(date -Is) Restarting $SERVICE_NAME..." >> "$LOG_FILE"
+        systemctl restart "$SERVICE_NAME"
+    fi
+}
+
+main
+MONITOR_SCRIPT
+
+# Systemd service for monitor
+cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.service 0644
+[Unit]
+Description=Resource Monitor for MHDDOS
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/resource-monitor.sh
+Restart=on-failure
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Systemd timer for monitor (check every 15s)
+cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.timer 0644
+[Unit]
+Description=Run resource monitor every 15s
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=resource-monitor.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Enable and start monitor
+systemctl enable --now resource-monitor.timer
+systemctl start resource-monitor.service
+
+# =========================
+# 7. Install Crash Protection
+# =========================
+echo "==> 7) Setting up crash protection"
+cat <<'CRASH_SCRIPT' | cat_as_root /usr/local/bin/crash-protection.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Check if MHDDOS is running
+if ! systemctl is-active --quiet mhddos_proxy_linux; then
+    echo "$(date -Is) MHDDOS crashed. Restarting..." >> /var/log/crash-protection.log
+    systemctl restart mhddos_proxy_linux
+
+    # If it crashes repeatedly, reduce settings
+    if grep -q "Restarting too often" /var/log/syslog; then
+        echo "$(date -Is) Too many crashes. Reducing settings..." >> /var/log/crash-protection.log
+        sed -i "s/threads = .*/threads = 128/" /opt/itarmy/bin/mhddos.ini
+        sed -i "s/copies = .*/copies = 1/" /opt/itarmy/bin/mhddos.ini
+        systemctl restart mhddos_proxy_linux
+    fi
+fi
+CRASH_SCRIPT
+
+# Systemd service for crash protection
+cat <<EOF | cat_as_root /etc/systemd/system/crash-protection.service 0644
+[Unit]
+Description=Crash Protection for MHDDOS
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/crash-protection.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Systemd timer for crash protection (check every 30s)
+cat <<EOF | cat_as_root /etc/systemd/system/crash-protection.timer 0644
+[Unit]
+Description=Run crash protection every 30s
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=crash-protection.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Enable crash protection
+systemctl enable --now crash-protection.timer
+systemctl start crash-protection.service
+
+# =========================
+# 8. Final Setup
+# =========================
+echo "==> 8) Finalizing setup"
+systemctl daemon-reload
+systemctl enable --now mhddos_proxy_linux.service
+systemctl restart mhddos_proxy_linux
+
+echo "Setup complete!"
+echo "Monitor logs: tail -f /var/log/resource-monitor.log"
+echo "Crash logs: tail -f /var/log/crash-protection.log"
+echo "System status: htop"
