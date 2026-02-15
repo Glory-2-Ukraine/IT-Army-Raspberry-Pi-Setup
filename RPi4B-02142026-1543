@@ -82,7 +82,7 @@ apt-get install -y ca-certificates curl iproute2 iputils-ping network-manager ht
 # =========================
 # 2. Network Interface Selection and Optimization for MHDDOS
 # =========================
-echo "==> Configuring optimal network interface for MHDDOS"
+echo "==> 2) Configuring optimal network interface for MHDDOS"
 
 # 1. Check available wireless interfaces
 AVAILABLE_WLAN=$(ip -o link show | awk -F': ' '$2 ~ /^wlan/ {print $2}' | sort)
@@ -148,7 +148,7 @@ sysctl net.ipv4.tcp_congestion_control 2>/dev/null
 # =========================
 # 3. Create mhddos.ini with time-aware settings
 # =========================
-echo "==> 2) Creating time-aware mhddos.ini"
+echo "==> 3) Creating time-aware mhddos.ini"
 INI_PATH="/opt/itarmy/bin/mhddos.ini"
 mkdir -p "$(dirname "$INI_PATH")"
 
@@ -175,7 +175,7 @@ EOF
 # =========================
 # 4. Create worker wrapper with QoS marking
 # =========================
-echo "==> 3) Creating worker wrapper with traffic marking"
+echo "==> 4) Creating worker wrapper with traffic marking"
 cat <<'WORKER_SCRIPT' | cat_as_root "$APP_EXECSTART" 0755
 #!/usr/bin/env bash
 set -euo pipefail
@@ -190,7 +190,7 @@ WORKER_SCRIPT
 # =========================
 # 5. Install Network Watchdog
 # =========================
-echo "==> 4) Installing network watchdog"
+echo "==> 5) Installing network watchdog"
 cat <<'WATCHDOG_SCRIPT' | cat_as_root /usr/local/bin/net-watchdog.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
@@ -209,12 +209,14 @@ check_network_quality() {
         logger -t net-watchdog "High latency detected: ${latency}ms > ${MAX_NET_LATENCY}ms"
         return 1
     fi
-    return 0
-    echo "==> Testing network connectivity"
+
     if ! ping -c 3 8.8.8.8 &> /dev/null; then
         echo "Error: No network connectivity detected"
         return 1
     fi
+
+    return 0
+    echo "==> Testing network connectivity"
 }
 
 
@@ -249,7 +251,7 @@ systemctl enable --now net-watchdog.service
 # =========================
 # 6. Install QoS Rules (SSH Priority)
 # =========================
-echo "==> 5) Setting up QoS rules for SSH priority"
+echo "==> 6) Setting up QoS rules for SSH priority"
 cat <<'QOS_SCRIPT' | cat_as_root /usr/local/bin/setup-qos.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
@@ -295,7 +297,7 @@ QOS_SCRIPT
 # =========================
 # 7. Install Resource Monitor with Time Awareness
 # =========================
-echo "==> 6) Installing comprehensive resource monitor"
+echo "==> 7) Installing comprehensive resource monitor"
 cat <<'MONITOR_SCRIPT' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
@@ -470,7 +472,7 @@ systemctl start resource-monitor.service
 # =========================
 # 8. Install Crash Protection
 # =========================
-echo "==> 7) Setting up crash protection"
+echo "==> 8) Setting up crash protection"
 cat <<'CRASH_SCRIPT' | cat_as_root /usr/local/bin/crash-protection.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
@@ -525,9 +527,9 @@ systemctl enable --now crash-protection.timer
 systemctl start crash-protection.service
 
 # =========================
-# 10. Final Setup
+# 9. Final Setup
 # =========================
-echo "==> 8) Finalizing setup"
+echo "==> 9) Finalizing setup"
 systemctl daemon-reload
 systemctl enable --now mhddos_proxy_linux.service
 systemctl restart mhddos_proxy_linux
