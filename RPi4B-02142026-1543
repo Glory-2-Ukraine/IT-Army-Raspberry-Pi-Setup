@@ -58,6 +58,16 @@ ITARMY_THREADS="${ITARMY_THREADS:-2048}"
 
 # ---- End Tunables ----
 
+# Validate thread/copy limits
+if [[ ${ITARMY_THREADS} -gt 4096 ]]; then
+    echo "Warning: ITARMY_THREADS (${ITARMY_THREADS}) exceeds maximum 4096, capping to 4096"
+    ITARMY_THREADS=4096
+fi
+if [[ ${ITARMY_COPIES} -gt 4 ]]; then
+    echo "Warning: ITARMY_COPIES (${ITARMY_COPIES}) exceeds maximum 4, capping to 4"
+    ITARMY_COPIES=4
+fi
+
 need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; exit 1; }; }
 backup_if_exists() { local f="$1"; [[ -e "$f" ]] && cp -a "$f" "${f}.BACKUP.$(date +%Y%m%d-%H%M%S)"; }
 cat_as_root() { local path="$1" mode="${2:-0644}"; tee "$path" >/dev/null; chown root:root "$path"; chmod "$mode" "$path"; }
@@ -67,7 +77,7 @@ cat_as_root() { local path="$1" mode="${2:-0644}"; tee "$path" >/dev/null; chown
 # =========================
 echo "==> 1) Installing base packages and dependencies"
 apt-get update -y
-apt-get install -y ca-certificates curl iproute2 iputils-ping network-manager htop lm-sensors iotop iftop jq bc
+apt-get install -y ca-certificates curl iproute2 iputils-ping network-manager htop lm-sensors iotop iftop jq bc stress-ng
 
 # =========================
 # 2. Create mhddos.ini with time-aware settings
@@ -123,12 +133,25 @@ set -euo pipefail
 check_network_quality() {
     local gw=$(ip route | awk '/default/ {print $3}')
     local latency=$(ping -c 3 "$gw" | tail -1 | awk -F'/' '{print $5}' | cut -d. -f1)
+    if ! ip link show "$IFACE" &> /dev/null; then
+        echo "Error: Network interface $IFACE not found"
+        echo "Available interfaces:"
+        ip -o link show | awk -F': ' '{print $2}'
+        exit 1
+    fi
     if [[ "$latency" -gt "$MAX_NET_LATENCY" ]]; then
         logger -t net-watchdog "High latency detected: ${latency}ms > ${MAX_NET_LATENCY}ms"
         return 1
     fi
     return 0
+    echo "==> Testing network connectivity"
+    if ! ping -c 3 8.8.8.8 &> /dev/null; then
+        echo "Error: No network connectivity detected"
+        exit 1
+    fi
 }
+
+
 
 # Main watchdog logic
 main() {
@@ -192,6 +215,10 @@ tc qdisc add dev "$IFACE" parent 1:30 handle 130: fq_codel
 tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip dport 22 0xffff flowid 1:10
 tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip sport 22 0xffff flowid 1:10
 
+# Pi Connect priority rules (if using port 2222)
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip dport 2222 0xffff flowid 1:10
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip sport 2222 0xffff flowid 1:10
+
 # Match MHDDOS traffic (low priority, marked with fwmark 1)
 tc filter add dev "$IFACE" protocol ip parent 1: prio 2 handle 1 fw flowid 1:20
 QOS_SCRIPT
@@ -211,7 +238,8 @@ set -euo pipefail
 INI_FILE="/opt/itarmy/bin/mhddos.ini"
 SERVICE_NAME="mhddos_proxy_linux"
 SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service.d/90-dynamic-limits.conf"
-LOG_FILE="/var/log/resource-monitor.log"
+LOG_FILE="/var/log/mhddos/resource-monitor.log"
+mkdir -p "/var/log/mhddos"
 MAX_LOAD=4.0
 MAX_TEMP=70
 MAX_NET_LATENCY=200
@@ -383,7 +411,7 @@ set -euo pipefail
 
 # Check if MHDDOS is running
 if ! systemctl is-active --quiet mhddos_proxy_linux; then
-    echo "$(date -Is) MHDDOS crashed. Restarting..." >> /var/log/crash-protection.log
+    echo "$(date -Is) MHDDOS crashed. Restarting..." >> /var/log/mhddos/crash-protection.log
     systemctl restart mhddos_proxy_linux
 
     # If it crashes repeatedly, reduce settings
@@ -439,6 +467,7 @@ systemctl enable --now mhddos_proxy_linux.service
 systemctl restart mhddos_proxy_linux
 
 echo "Setup complete!"
-echo "Monitor logs: tail -f /var/log/resource-monitor.log"
-echo "Crash logs: tail -f /var/log/crash-protection.log"
+echo "Monitor logs: tail -f /var/log/mhddos/resource-monitor.log"
+echo "Crash logs: tail -f /var/log/mhddos/crash-protection.log"
 echo "System status: htop"
+echo "Temperature: cat /sys/class/thermal/thermal_zone0/temp"
