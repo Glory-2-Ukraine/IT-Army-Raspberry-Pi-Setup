@@ -80,7 +80,73 @@ apt-get update -y
 apt-get install -y ca-certificates curl iproute2 iputils-ping network-manager htop lm-sensors iotop iftop jq bc stress-ng
 
 # =========================
-# 2. Create mhddos.ini with time-aware settings
+# 2. Network Interface Selection and Optimization for MHDDOS
+# =========================
+echo "==> Configuring optimal network interface for MHDDOS"
+
+# 1. Check available wireless interfaces
+AVAILABLE_WLAN=$(ip -o link show | awk -F': ' '$2 ~ /^wlan/ {print $2}' | sort)
+echo "Available wireless interfaces: $AVAILABLE_WLAN"
+
+# 2. Select interface (prefer wlan1 if available, otherwise wlan0)
+if echo "$AVAILABLE_WLAN" | grep -q "wlan1"; then
+    IFACE="wlan1"
+    echo "Selected wlan1 for better performance and isolation"
+    # Disable wlan0 to prevent conflicts
+    ip link set wlan0 down 2>/dev/null || true
+    iw dev wlan0 set type managed 2>/dev/null || true
+else
+    IFACE="wlan0"
+    echo "Using wlan0 (wlan1 not available)"
+fi
+
+# Update the IFACE variable in the script's environment
+export IFACE=$IFACE
+sed -i "s/IFACE=.*/IFACE=\"$IFACE\"/" "$0"
+
+# 3. Optimize the selected interface for MHDDOS
+echo "Optimizing $IFACE for high-throughput operation"
+# Disable power saving completely
+nmcli dev set "$IFACE" wifi.powersave 0 2>/dev/null || true
+nmcli con mod "$IFACE" wifi.powersave 0 2>/dev/null || true
+nmcli con mod "$IFACE" 802-11-wireless.powersave 0 2>/dev/null || true
+
+# Increase TX power (if supported)
+iw reg set US 2>/dev/null || true  # Set to US regulatory domain for max power
+iwconfig "$IFACE" txpower 30 2>/dev/null || true  # Set max transmit power
+
+# Enable TCP optimizations for high throughput
+cat >> /etc/sysctl.conf <<EOF
+# MHDDOS TCP optimizations
+net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+net.ipv4.tcp_rmem=4096 87380 16777216
+net.ipv4.tcp_wmem=4096 65536 16777216
+net.ipv4.tcp_congestion_control=bbr
+net.ipv4.tcp_tw_reuse=1
+net.ipv4.tcp_fin_timeout=30
+EOF
+sysctl -p >/dev/null 2>&1
+
+# 4. Disable all other wireless interfaces
+for iface in $(echo "$AVAILABLE_WLAN" | grep -v "$IFACE"); do
+    echo "Disabling $iface to prevent interference"
+    ip link set "$iface" down 2>/dev/null || true
+    iw dev "$iface" set type managed 2>/dev/null || true
+done
+
+# 5. Verify configuration
+echo "Active wireless interface:"
+ip -o link show "$IFACE"
+echo "Power save setting:"
+nmcli -f WIRELESS-PROPERTIES.WIFI.POWERSAVE dev show "$IFACE" 2>/dev/null | grep powersave
+echo "TX Power:"
+iwconfig "$IFACE" 2>/dev/null | grep "Tx-Power"
+echo "TCP congestion control:"
+sysctl net.ipv4.tcp_congestion_control 2>/dev/null
+
+# =========================
+# 3. Create mhddos.ini with time-aware settings
 # =========================
 echo "==> 2) Creating time-aware mhddos.ini"
 INI_PATH="/opt/itarmy/bin/mhddos.ini"
@@ -107,7 +173,7 @@ user-id = $(printf '%s' "$ITARMY_USER_ID" | base64 -d)
 EOF
 
 # =========================
-# 3. Create worker wrapper with QoS marking
+# 4. Create worker wrapper with QoS marking
 # =========================
 echo "==> 3) Creating worker wrapper with traffic marking"
 cat <<'WORKER_SCRIPT' | cat_as_root "$APP_EXECSTART" 0755
@@ -122,7 +188,7 @@ exec /opt/itarmy/bin/mhddos_proxy_linux
 WORKER_SCRIPT
 
 # =========================
-# 4. Install Network Watchdog
+# 5. Install Network Watchdog
 # =========================
 echo "==> 4) Installing network watchdog"
 cat <<'WATCHDOG_SCRIPT' | cat_as_root /usr/local/bin/net-watchdog.sh 0755
@@ -181,14 +247,14 @@ EOF
 systemctl enable --now net-watchdog.service
 
 # =========================
-# 5. Install QoS Rules (SSH Priority)
+# 6. Install QoS Rules (SSH Priority)
 # =========================
 echo "==> 5) Setting up QoS rules for SSH priority"
 cat <<'QOS_SCRIPT' | cat_as_root /usr/local/bin/setup-qos.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
-IFACE="$1"
+IFACE="${1:-$IFACE}"  # Use the global IFACE if not provided
 modprobe ifb
 ip link add ifb0 type ifb
 ip link set ifb0 up
@@ -227,7 +293,7 @@ QOS_SCRIPT
 /usr/local/bin/setup-qos.sh "$IFACE"
 
 # =========================
-# 6. Install Resource Monitor with Time Awareness
+# 7. Install Resource Monitor with Time Awareness
 # =========================
 echo "==> 6) Installing comprehensive resource monitor"
 cat <<'MONITOR_SCRIPT' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
@@ -402,7 +468,7 @@ systemctl enable --now resource-monitor.timer
 systemctl start resource-monitor.service
 
 # =========================
-# 7. Install Crash Protection
+# 8. Install Crash Protection
 # =========================
 echo "==> 7) Setting up crash protection"
 cat <<'CRASH_SCRIPT' | cat_as_root /usr/local/bin/crash-protection.sh 0755
@@ -459,7 +525,7 @@ systemctl enable --now crash-protection.timer
 systemctl start crash-protection.service
 
 # =========================
-# 8. Final Setup
+# 10. Final Setup
 # =========================
 echo "==> 8) Finalizing setup"
 systemctl daemon-reload
