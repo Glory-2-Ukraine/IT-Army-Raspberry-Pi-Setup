@@ -318,6 +318,15 @@ is_night_time() {
     [[ "$now" > "$FULL_THROTTLE_START" ]] || [[ "$now" < "$FULL_THROTTLE_END" ]]
 }
 
+# Get MHDDOS-specific metrics
+local mhddos_pid=$(pgrep -f "mhddos_proxy_linux" | head -1)
+if [[ -n "$mhddos_pid" ]]; then
+    local mhddos_cpu=$(ps -p $mhddos_pid -o %cpu | tail -1)
+    local mhddos_mem=$(ps -p $mhddos_pid -o %mem | tail -1)
+    local mhddos_threads=$(ps -p $mhddos_pid -o nlwp | tail -1)
+    echo "$(date -Is) MHDDOS: PID=$mhddos_pid, CPU=$mhddos_cpu%, MEM=$mhddos_mem%, Threads=$mhddos_threads" >> "$LOG_FILE"
+fi
+
 # Get system metrics
 get_metrics() {
     local load=$(uptime | awk -F'load average: ' '{print $2}' | awk '{print $3}' | cut -d, -f1)
@@ -325,8 +334,11 @@ get_metrics() {
     local mem=$(free | awk '/Mem:/ {printf "%.0f", $3/$2 * 100}')
     local temp=$(cat /sys/class/thermal/thermal_zone0/temp | awk '{print $1/1000}')
     local latency=$(ping -c 3 $(ip route | awk '/default/ {print $3}') | tail -1 | awk -F'/' '{print $5}' | cut -d. -f1)
-
-    echo "$load $cpu $mem $temp $latency"
+    local tx_errors=$(ip -s link show "$IFACE" | awk '/TX:/ {print $3}')
+    local rx_errors=$(ip -s link show "$IFACE" | awk '/RX:/ {print $3}')
+    local retries=$(iwconfig "$IFACE" 2>/dev/null | grep -c "Retry")
+    echo "$load $cpu $mem $temp $latency $tx_errors $rx_errors $retries"
+    echo "$(date -Is) Load=$load, CPU=$cpu%, MEM=$mem%, Temp=${temp}C, Latency=${latency}ms, TX-Err=$tx_errors, RX-Err=$rx_errors, Retries=$retries" >> "$LOG_FILE"
 }
 
 # Update systemd limits
