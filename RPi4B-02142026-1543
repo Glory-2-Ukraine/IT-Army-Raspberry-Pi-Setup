@@ -137,7 +137,7 @@ check_network_quality() {
         echo "Error: Network interface $IFACE not found"
         echo "Available interfaces:"
         ip -o link show | awk -F': ' '{print $2}'
-        exit 1
+        return 1
     fi
     if [[ "$latency" -gt "$MAX_NET_LATENCY" ]]; then
         logger -t net-watchdog "High latency detected: ${latency}ms > ${MAX_NET_LATENCY}ms"
@@ -147,7 +147,7 @@ check_network_quality() {
     echo "==> Testing network connectivity"
     if ! ping -c 3 8.8.8.8 &> /dev/null; then
         echo "Error: No network connectivity detected"
-        exit 1
+        return 1
     fi
 }
 
