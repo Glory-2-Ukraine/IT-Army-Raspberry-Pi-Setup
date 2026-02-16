@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+#
+# run with
+# sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/mhddos-diagnostics.sh | tee /usr/local/bin/mhddos-diagnostics.sh >/dev/null && chmod +x /usr/local/bin/mhddos-diagnostics.sh && echo 'Diagnostic script installed successfully'"
+#
+
 # =========================
 # MHDDOS DIAGNOSTIC SCRIPT
 # Run this AFTER your main script to collect QA data
