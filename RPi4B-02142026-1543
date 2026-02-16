@@ -491,6 +491,7 @@ get_metrics() {
     echo "$(date -Is) Load=$load, CPU=$cpu%, MEM=$mem%, Temp=${temp}C, Latency=${latency}ms, TX-Err=$tx_errors, RX-Err=$rx_errors, Retries=$retries, MHDDOS-CPU=$mhddos_cpu%, MHDDOS-MEM=$mhddos_mem%, MHDDOS-Threads=$mhddos_threads" >> "$LOG_FILE"
 }
 
+
 # Update systemd limits
 update_limits() {
     local cpu_quota=$1
