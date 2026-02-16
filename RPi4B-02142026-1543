@@ -472,9 +472,21 @@ get_metrics() {
     local latency=$(ping -c 3 $(ip route | awk '/default/ {print $3}') | tail -1 | awk -F'/' '{print $5}' | cut -d. -f1)
     local tx_errors=$(ip -s link show "$IFACE" | awk '/TX:/ {print $3}')
     local rx_errors=$(ip -s link show "$IFACE" | awk '/RX:/ {print $3}')
-    local retries=$(iwconfig "$IFACE" 2>/dev/null | grep -c "Retry")
-    echo "$load $cpu $mem $temp $latency $tx_errors $rx_errors $retries"
-    echo "$(date -Is) Load=$load, CPU=$cpu%, MEM=$mem%, Temp=${temp}C, Latency=${latency}ms, TX-Err=$tx_errors, RX-Err=$rx_errors, Retries=$retries" >> "$LOG_FILE"
+    local retries=$(iwconfig "$IFACE" 2>/dev/null | grep -c "Retry" || echo 0)
+
+    # Get MHDDOS-specific metrics
+    local mhddos_pid=$(pgrep -f "mhddos_proxy_linux" | head -1)
+    local mhddos_cpu="0"
+    local mhddos_mem="0"
+    local mhddos_threads="0"
+    if [[ -n "$mhddos_pid" ]]; then
+        mhddos_cpu=$(ps -p $mhddos_pid -o %cpu | tail -1)
+        mhddos_mem=$(ps -p $mhddos_pid -o %mem | tail -1)
+        mhddos_threads=$(ps -p $mhddos_pid -o nlwp | tail -1)
+    fi
+
+    echo "$load $cpu $mem $temp $latency $tx_errors $rx_errors $retries $mhddos_cpu $mhddos_mem $mhddos_threads"
+    echo "$(date -Is) Load=$load, CPU=$cpu%, MEM=$mem%, Temp=${temp}C, Latency=${latency}ms, TX-Err=$tx_errors, RX-Err=$rx_errors, Retries=$retries, MHDDOS-CPU=$mhddos_cpu%, MHDDOS-MEM=$mhddos_mem%, MHDDOS-Threads=$mhddos_threads" >> "$LOG_FILE"
 }
 
 # Update systemd limits
@@ -494,8 +506,6 @@ adjust_settings() {
     read load cpu mem temp latency <<< $(get_metrics)
     local changed=0
     local night_time=$(is_night_time && echo "1" || echo "0")
-
-    echo "$(date -Is) Load=$load, CPU=$cpu%, MEM=$mem%, Temp=${temp}C, Latency=${latency}ms" >> "$LOG_FILE"
 
     # EMERGENCY: If any critical threshold exceeded
     if (( $(echo "$load > $MAX_LOAD" | bc -l) )) || \
@@ -528,31 +538,35 @@ adjust_settings() {
         if (( $(echo "$load < 2.0" | bc -l) )) && [[ "$night_time" -eq 0 ]]; then
             echo "$(date -Is) Low load detected. Applying power savings..." >> "$LOG_FILE"
         
-            # Reduce CPU frequency when load is low (but keep governor on performance)
-            echo "1200000" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
+            # Apply daytime CPU frequency limit
+            echo "$CPU_MAX_FREQ_DAY" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
         
             # Enable USB auto-suspend for non-critical devices
-            for usb in /sys/bus/usb/devices/*; do
-                if [[ "$usb" != *"$IFACE"* ]]; then
-                    echo "auto" | tee $usb/power/control 2>/dev/null
-                fi
-            done
+            if [[ "$USB_AUTOSUSPEND" -eq 1 ]]; then
+                for usb in /sys/bus/usb/devices/*; do
+                    if [[ "$usb" != *"$IFACE"* ]]; then
+                        echo "auto" | tee $usb/power/control 2>/dev/null
+                    fi
+                done
+            fi
         
             # Reduce filesystem sync frequency
-            sysctl -w vm.dirty_writeback_centisecs=3000 >/dev/null 2>/dev/null
+            sysctl -w vm.dirty_writeback_centisecs=$DIRTY_WRITEBACK_LOW >/dev/null 2>&1
         elif (( $(echo "$load > 4.0" | bc -l) )) || [[ "$night_time" -eq 1 ]]; then
             echo "$(date -Is) High load or night time. Maximizing performance..." >> "$LOG_FILE"
         
             # Restore full CPU frequency
-            echo "1400000" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
+            echo "$CPU_MAX_FREQ_NIGHT" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
         
             # Disable USB auto-suspend for all devices
-            for usb in /sys/bus/usb/devices/*; do
-                echo "on" | tee $usb/power/control 2>/dev/null
-            done
+            if [[ "$USB_AUTOSUSPEND" -eq 1 ]]; then
+                for usb in /sys/bus/usb/devices/*; do
+                    echo "on" | tee $usb/power/control 2>/dev/null
+                done
+            fi
         
             # Increase filesystem performance
-            sysctl -w vm.dirty_writeback_centisecs=500 >/dev/null 2>/dev/null
+            sysctl -w vm.dirty_writeback_centisecs=$DIRTY_WRITEBACK_HIGH >/dev/null 2>&1
         fi
 
         # Scale based on current usage
