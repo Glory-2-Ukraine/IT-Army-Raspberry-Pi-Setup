@@ -311,19 +311,68 @@ user-id = $(printf '%s' "$ITARMY_USER_ID" | base64 -d)
 EOF
 
 # =========================
-# 4. Create worker wrapper with QoS marking
+# 4. Install MHDDOS Proxy Binary
 # =========================
-echo "==> 4) Creating worker wrapper with traffic marking"
-cat <<'WORKER_SCRIPT' | cat_as_root "$APP_EXECSTART" 0755
-#!/usr/bin/env bash
-set -euo pipefail
+echo "==> 4) Downloading and installing MHDDOS proxy binary"
+mkdir -p "${ITARMY_INSTALLER_PATH}"
 
-# Mark packets for QoS
-iptables -t mangle -A OUTPUT -m owner --uid-owner $(id -u) -j MARK --set-mark 1 2>/dev/null || true
+# Download the binary directly
+echo "Downloading MHDDOS proxy binary from ${ITARMY_INSTALL_URL}"
+if ! curl -fsSL "${ITARMY_INSTALL_URL}" -o "${ITARMY_BIN}" ; then
+    echo "ERROR: Failed to download MHDDOS binary from ${ITARMY_INSTALL_URL}"
+    echo "Attempting alternative download method..."
+    if ! wget -q "${ITARMY_INSTALL_URL}" -O "${ITARMY_BIN}" ; then
+        echo "ERROR: All download attempts failed. Check your internet connection."
+        exit 1
+    fi
+fi
 
-# Start the worker
-exec /opt/itarmy/bin/mhddos_proxy_linux
-WORKER_SCRIPT
+# Set permissions
+chmod +x "${ITARMY_BIN}"
+chown root:root "${ITARMY_BIN}"
+
+# Verify the binary
+if ! file "${ITARMY_BIN}" | grep -q "ELF"; then
+    echo "ERROR: Downloaded file is not a valid binary"
+    rm -f "${ITARMY_BIN}"
+    exit 1
+fi
+
+echo "MHDDOS binary installed successfully at ${ITARMY_BIN}"
+
+# =========================
+# 5. Install MHDDOS Service
+# =========================
+echo "==> 5) Installing MHDDOS systemd service"
+
+# Create service file
+cat <<EOF | cat_as_root /etc/systemd/system/mhddos_proxy_linux.service 0644
+[Unit]
+Description=MHDDOS Proxy Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${ITARMY_INSTALLER_PATH}
+ExecStart=${ITARMY_BIN}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+LimitNOFILE=1000000
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start the service
+systemctl daemon-reload
+systemctl enable mhddos_proxy_linux.service
+echo "MHDDOS service installed and enabled"
+
 
 # =========================
 # 5. Install Network Watchdog
