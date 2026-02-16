@@ -217,7 +217,7 @@ done
 echo "Active wireless interface:"
 ip -o link show "$IFACE"
 echo "Power save setting:"
-nmcli -f WIRELESS-PROPERTIES.WIFI.POWERSAVE dev show "$IFACE" 2>/dev/null | grep powersave
+nmcli -f WIRELESS-PROPERTIES.WIFI.POWERSAVE dev show "$IFACE" 2>/dev/null | grep -i powersave || true
 echo "TX Power:"
 iwconfig "$IFACE" 2>/dev/null | grep "Tx-Power"
 echo "TCP congestion control:"
