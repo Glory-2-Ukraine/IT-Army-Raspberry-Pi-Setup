@@ -443,7 +443,7 @@ cat <<'QOS_SCRIPT' | cat_as_root /usr/local/bin/setup-qos.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
-IFACE="${1:-$IFACE}"  # Use the global IFACE if not provided
+IFACE="${1:-wlan0}"
 modprobe ifb
 ip link add ifb0 type ifb
 ip link set ifb0 up
@@ -716,26 +716,27 @@ cat <<'CRASH_SCRIPT' | cat_as_root /usr/local/bin/crash-protection.sh 0755
 set -euo pipefail
 
 # Check if MHDDOS is running
+# Remove the `if` condition and always run:
+echo "$(date -Is) Checking MHDDOS status..." >> /var/log/mhddos/crash-protection.log
 if ! systemctl is-active --quiet mhddos_proxy_linux; then
     echo "$(date -Is) MHDDOS crashed. Restarting..." >> /var/log/mhddos/crash-protection.log
     systemctl restart mhddos_proxy_linux
-
     # Reset power optimizations after crash
     echo "1400000" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
     for usb in /sys/bus/usb/devices/*; do
         echo "on" | tee $usb/power/control 2>/dev/null
     done
-    sysctl -w vm.dirty_writeback_centisecs=500 >/dev/null 2>/dev/null
+    sysctl -w vm.dirty_writeback_centisecs=500 >/dev/null 2>&1
     echo "$(date -Is) Reset power optimizations after crash" >> /var/log/mhddos/crash-protection.log
-
-    # If it crashes repeatedly, reduce settings
-    if grep -q "Restarting too often" /var/log/syslog; then
-        echo "$(date -Is) Too many crashes. Reducing settings..." >> /var/log/crash-protection.log
-        sed -i "s/threads = .*/threads = 128/" /opt/itarmy/bin/mhddos.ini
-        sed -i "s/copies = .*/copies = 1/" /opt/itarmy/bin/mhddos.ini
-        systemctl restart mhddos_proxy_linux
-    fi
 fi
+
+if grep -q "Restarting too often" /var/log/syslog; then
+    echo "$(date -Is) Too many crashes. Reducing settings..." >> /var/log/mhddos/crash-protection.log
+    sed -i "s/threads = .*/threads = 128/" /opt/itarmy/bin/mhddos.ini
+    sed -i "s/copies = .*/copies = 1/" /opt/itarmy/bin/mhddos.ini
+    systemctl restart mhddos_proxy_linux
+fi
+
 CRASH_SCRIPT
 
 # Systemd service for crash protection
