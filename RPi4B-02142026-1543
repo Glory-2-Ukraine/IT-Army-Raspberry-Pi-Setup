@@ -794,3 +794,38 @@ echo "Monitor logs: tail -f /var/log/mhddos/resource-monitor.log"
 echo "Crash logs: tail -f /var/log/mhddos/crash-protection.log"
 echo "System status: htop"
 echo "Temperature: cat /sys/class/thermal/thermal_zone0/temp"
+
+# =========================
+# Final Verification
+# =========================
+echo "==> Running final verification checks"
+
+# Check binary
+if [[ ! -f "${ITARMY_BIN}" ]]; then
+    echo "ERROR: MHDDOS binary not found at ${ITARMY_BIN}"
+    exit 1
+fi
+
+# Check service
+if ! systemctl list-unit-files | grep -q mhddos_proxy_linux.service; then
+    echo "ERROR: MHDDOS service not installed"
+    exit 1
+fi
+
+# Start service if not running
+if ! systemctl is-active mhddos_proxy_linux; then
+    echo "Starting MHDDOS service..."
+    systemctl start mhddos_proxy_linux
+    sleep 5
+fi
+
+# Check service status
+if systemctl is-active mhddos_proxy_linux; then
+    echo "MHDDOS service is running successfully"
+else
+    echo "ERROR: MHDDOS service failed to start"
+    journalctl -u mhddos_proxy_linux -n 20 --no-pager
+    exit 1
+fi
+
+
