@@ -146,6 +146,101 @@ echo "TCP congestion control:"
 sysctl net.ipv4.tcp_congestion_control 2>/dev/null
 
 # =========================
+# Power Optimization for MHDDOS (Network-Preserving)
+# =========================
+echo "==> Applying power optimizations (network performance preserved)"
+
+# 1. CPU Optimization - Preserve performance but reduce power when possible
+echo "Configuring CPU for performance with power efficiency"
+# Set governor to performance (best for MHDDOS)
+echo "performance" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+# But limit max frequency to 1.4GHz (balance between power/performance)
+echo "1400000" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq
+# Enable all CPU cores (MHDDOS needs all cores)
+for i in /sys/devices/system/cpu/cpu[1-3]; do
+    echo 1 | tee $i/online 2>/dev/null
+done
+
+# 2. WiFi Optimization - Maximize performance, disable power saving
+echo "Optimizing WiFi for maximum throughput"
+iw dev "$IFACE" set power_save off
+iwconfig "$IFACE" txpower 30  # Max power for best signal
+# Disable WiFi power saving in NetworkManager
+nmcli dev set "$IFACE" wifi.powersave 0
+nmcli con mod "$IFACE" wifi.powersave 0
+nmcli con mod "$IFACE" 802-11-wireless.powersave 0
+
+# 3. Disable Unused Peripherals
+echo "Disabling unused peripherals to save power"
+# Disable Bluetooth (not used)
+rfkill block bluetooth
+systemctl disable hciuart.service 2>/dev/null
+systemctl disable bluetooth.service 2>/dev/null
+
+# Disable HDMI (headless)
+/usr/bin/tvservice -o  # Turn off HDMI
+
+# Disable LEDs
+echo "Disabling activity LEDs"
+echo "none" | tee /sys/class/leds/led0/trigger
+echo "none" | tee /sys/class/leds/led1/trigger 2>/dev/null
+echo 0 | tee /sys/class/leds/led0/brightness
+echo 0 | tee /sys/class/leds/led1/brightness 2>/dev/null
+
+# 4. USB Optimization - Preserve WiFi dongle performance
+echo "Optimizing USB for power savings (preserving WiFi dongle performance)"
+# Auto-suspend USB devices after 5 seconds of inactivity (except WiFi)
+for usb in /sys/bus/usb/devices/*; do
+    if [[ "$usb" != *"$IFACE"* ]]; then
+        echo "auto" | tee $usb/power/control 2>/dev/null
+        echo "5" | tee $usb/power/autosuspend_delay_ms 2>/dev/null
+    fi
+done
+
+# 5. Storage Optimization
+echo "Optimizing storage for power efficiency"
+# Mount with noatime for less disk writes
+mount -o remount,noatime,nodiratime /
+# Reduce filesystem sync frequency
+sysctl -w vm.dirty_writeback_centisecs=1500  # 15 seconds
+sysctl -w vm.dirty_expire_centisecs=3000    # 30 seconds
+
+# 6. Memory Optimization
+echo "Optimizing memory usage"
+# Use zswap instead of swap to reduce disk I/O
+echo "1" | tee /sys/module/zswap/parameters/enabled
+sysctl -w vm.swappiness=10  # Reduce swapping
+
+# 7. Thermal Management
+echo "Configuring thermal management"
+# Set conservative thermal limits (65°C)
+echo "65000" | tee /sys/class/thermal/thermal_zone0/trip_point_0_temp
+
+# 8. Kernel Tuning for Network Performance
+echo "Optimizing kernel for network performance"
+sysctl -w net.core.somaxconn=4096          # Increase socket backlog
+sysctl -w net.ipv4.tcp_max_syn_backlog=8192
+sysctl -w net.ipv4.tcp_tw_reuse=1          # Enable TCP connection reuse
+sysctl -w net.ipv4.tcp_fin_timeout=15      # Reduce FIN timeout
+sysctl -w net.ipv4.tcp_keepalive_time=60   # Reduce keepalive frequency
+
+# Log all power optimizations
+{
+echo "$(date -Is) POWER OPTIMIZATIONS APPLIED:"
+echo "CPU Governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
+echo "CPU Max Freq: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq)"
+echo "WiFi Power Save: $(iw dev $IFACE get power_save)"
+echo "WiFi TX Power: $(iwconfig $IFACE | grep "Tx-Power")"
+echo "Bluetooth Status: $(rfkill list bluetooth | grep -c "Soft blocked: yes")"
+echo "HDMI Status: $(vcgencmd display_power)"
+echo "USB Auto-Suspend: $(cat /sys/bus/usb/devices/*/power/autosuspend_delay_ms | head -1)"
+echo "Filesystem Mount Options: $(mount | grep "on / ")"
+echo "Swapiness: $(sysctl vm.swappiness | awk '{print $3}')"
+echo "Thermal Limit: $(cat /sys/class/thermal/thermal_zone0/trip_point_0_temp)"
+} >> "/var/log/mhddos/setup.log"
+
+
+# =========================
 # 3. Create mhddos.ini with time-aware settings
 # =========================
 echo "==> 3) Creating time-aware mhddos.ini"
@@ -388,6 +483,37 @@ adjust_settings() {
             max_mem="512M"
         fi
 
+        # Power optimization based on current load
+        if (( $(echo "$load < 2.0" | bc -l) )) && [[ "$night_time" -eq 0 ]]; then
+            echo "$(date -Is) Low load detected. Applying power savings..." >> "$LOG_FILE"
+        
+            # Reduce CPU frequency when load is low (but keep governor on performance)
+            echo "1200000" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
+        
+            # Enable USB auto-suspend for non-critical devices
+            for usb in /sys/bus/usb/devices/*; do
+                if [[ "$usb" != *"$IFACE"* ]]; then
+                    echo "auto" | tee $usb/power/control 2>/dev/null
+                fi
+            done
+        
+            # Reduce filesystem sync frequency
+            sysctl -w vm.dirty_writeback_centisecs=3000 >/dev/null 2>/dev/null
+        elif (( $(echo "$load > 4.0" | bc -l) )) || [[ "$night_time" -eq 1 ]]; then
+            echo "$(date -Is) High load or night time. Maximizing performance..." >> "$LOG_FILE"
+        
+            # Restore full CPU frequency
+            echo "1400000" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
+        
+            # Disable USB auto-suspend for all devices
+            for usb in /sys/bus/usb/devices/*; do
+                echo "on" | tee $usb/power/control 2>/dev/null
+            done
+        
+            # Increase filesystem performance
+            sysctl -w vm.dirty_writeback_centisecs=500 >/dev/null 2>/dev/null
+        fi
+
         # Scale based on current usage
         if (( $(echo "$cpu > $max_cpu" | bc -l) )) || (( $(echo "$mem > 85" | bc -l) )); then
             echo "$(date -Is) High resource usage. Scaling DOWN..." >> "$LOG_FILE"
@@ -493,6 +619,14 @@ set -euo pipefail
 if ! systemctl is-active --quiet mhddos_proxy_linux; then
     echo "$(date -Is) MHDDOS crashed. Restarting..." >> /var/log/mhddos/crash-protection.log
     systemctl restart mhddos_proxy_linux
+
+    # Reset power optimizations after crash
+    echo "1400000" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
+    for usb in /sys/bus/usb/devices/*; do
+        echo "on" | tee $usb/power/control 2>/dev/null
+    done
+    sysctl -w vm.dirty_writeback_centisecs=500 >/dev/null 2>/dev/null
+    echo "$(date -Is) Reset power optimizations after crash" >> /var/log/mhddos/crash-protection.log
 
     # If it crashes repeatedly, reduce settings
     if grep -q "Restarting too often" /var/log/syslog; then
