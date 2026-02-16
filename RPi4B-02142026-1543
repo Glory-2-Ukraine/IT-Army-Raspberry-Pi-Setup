@@ -375,9 +375,9 @@ echo "MHDDOS service installed and enabled"
 
 
 # =========================
-# 5. Install Network Watchdog
+# 6. Install Network Watchdog
 # =========================
-echo "==> 5) Installing network watchdog"
+echo "==> 6) Installing network watchdog"
 cat <<'WATCHDOG_SCRIPT' | cat_as_root /usr/local/bin/net-watchdog.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
@@ -504,15 +504,6 @@ is_night_time() {
     local now=$(date +%H:%M)
     [[ "$now" > "$FULL_THROTTLE_START" ]] || [[ "$now" < "$FULL_THROTTLE_END" ]]
 }
-
-# Get MHDDOS-specific metrics
-local mhddos_pid=$(pgrep -f "mhddos_proxy_linux" | head -1)
-if [[ -n "$mhddos_pid" ]]; then
-    local mhddos_cpu=$(ps -p $mhddos_pid -o %cpu | tail -1)
-    local mhddos_mem=$(ps -p $mhddos_pid -o %mem | tail -1)
-    local mhddos_threads=$(ps -p $mhddos_pid -o nlwp | tail -1)
-    echo "$(date -Is) MHDDOS: PID=$mhddos_pid, CPU=$mhddos_cpu%, MEM=$mhddos_mem%, Threads=$mhddos_threads" >> "$LOG_FILE"
-fi
 
 # Get system metrics
 get_metrics() {
