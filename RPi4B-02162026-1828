@@ -1,0 +1,856 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi4B-02142026-1543 -o /usr/local/bin/mhddos-setup.sh && chmod +x /usr/local/bin/mhddos-setup.sh && echo 'Script installed. Run with: sudo mhddos-setup.sh'"
+
+# =========================
+# MHDDOS Raspberry Pi 4B Optimized Setup
+# Features:
+# - Dynamic resource monitoring (CPU, Mem, Temp, Network)
+# - Time-based throttling (full throttle midnight-6am)
+# - Absolute priority for SSH and Pi Connect
+# - Network watchdog and QoS
+# - Crash protection and auto-restart
+# =========================
+
+# ---- Tunables ----
+INSTALL_HARDENED_APP=1
+APP_NAME="mhddos_proxy_linux"
+APP_USER="pi"
+START_SCRIPT="${APP_NAME}-worker.sh"
+APP_EXECSTART="/usr/local/bin/${START_SCRIPT}"
+APP_ENV_FILE="/etc/default/${APP_NAME}"
+APP_WORKDIR="/opt/itarmy/bin"
+
+# Resource limits
+APP_CPU_QUOTA_DAY="40%"      # Daytime CPU limit
+APP_CPU_QUOTA_NIGHT="80%"    # Nighttime CPU limit (midnight-6am)
+APP_MEM_MAX="768M"           # Memory limit
+APP_NICE="19"                # Nice value
+APP_DEADMAN_EVERY="6h"       # Deadman timer
+APP_HEARTBEAT_EVERY="5m"     # Heartbeat timer
+
+# Network
+IFACE="${IFACE:-wlan0}"
+LAN_SSH_CLIENT="192.168.1.0/24"  # Your local network for SSH priority
+COOLDOWN_S=180                 # Reconnect cooldown
+TIMER_SEC=15                  # Watchdog check interval
+GW_MISS_MAX=3                 # Gateway miss threshold
+
+# Thresholds
+MAX_LOAD=4.0                  # Max 15-min load average
+MAX_TEMP=70                   # Max CPU temp in Celsius
+MAX_CPU_DAY=60                # Max CPU% during day
+MAX_CPU_NIGHT=90              # Max CPU% during night
+MAX_MEM=85                    # Max memory usage %
+MAX_NET_LATENCY=200           # Max ping latency to gateway (ms)
+
+# Time window for full throttle (midnight-6am)
+FULL_THROTTLE_START="00:00"
+FULL_THROTTLE_END="06:00"
+
+# ---- ITARMY installer + runtime ----
+ITARMY_INSTALL_URL="${ITARMY_INSTALL_URL:-https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/download/mhddos_proxy_linux_arm64}"
+ITARMY_INSTALLER_PATH="${ITARMY_INSTALLER_PATH:-/opt/itarmy/bin/}"
+ITARMY_BIN="/opt/itarmy/bin/mhddos_proxy_linux"
+ITARMY_LANG="${ITARMY_LANG:-en}"
+ITARMY_USER_ID="${ITARMY_USER_ID:-NTI3MjIzNzgxNQ==}"
+ITARMY_COPIES="${ITARMY_COPIES:-1}"
+ITARMY_THREADS="${ITARMY_THREADS:-2048}"
+
+# ---- Power Optimization Tunables ----
+# CPU Optimization
+CPU_GOVERNOR="performance"          # Governor: performance, ondemand, powersave
+CPU_MAX_FREQ_DAY=1200000            # Daytime max frequency (1.2GHz)
+CPU_MAX_FREQ_NIGHT=1400000          # Nighttime max frequency (1.4GHz)
+
+# WiFi Optimization
+WIFI_POWER_SAVE=0                   # 0=disabled (max performance), 1=enabled
+WIFI_TX_POWER=30                    # TX power level (15-30)
+
+# Peripheral Management
+DISABLE_BLUETOOTH=1                 # 1=disable Bluetooth
+DISABLE_HDMI=1                      # 1=disable HDMI
+DISABLE_LEDS=1                      # 1=disable activity LEDs
+
+# USB Power Management
+USB_AUTOSUSPEND=1                   # 1=enable USB auto-suspend
+
+# Storage Optimization
+ENABLE_NOATIME=1                    # 1=mount with noatime
+DIRTY_WRITEBACK_LOW=3000            # Low load writeback delay (ms)
+DIRTY_WRITEBACK_HIGH=500            # High load writeback delay (ms)
+
+# Memory Optimization
+ENABLE_ZSWAP=1                      # 1=enable zswap
+SWAPPINESS=10                       # Swappiness value (10-60)
+
+# Thermal Management
+THERMAL_LIMIT=65                    # Thermal trip point (°C)
+
+
+# ---- End Tunables ----
+
+# Validate thread/copy limits
+if [[ ${ITARMY_THREADS} -gt 4096 ]]; then
+    echo "Warning: ITARMY_THREADS (${ITARMY_THREADS}) exceeds maximum 4096, capping to 4096"
+    ITARMY_THREADS=4096
+fi
+if [[ ${ITARMY_COPIES} -gt 4 ]]; then
+    echo "Warning: ITARMY_COPIES (${ITARMY_COPIES}) exceeds maximum 4, capping to 4"
+    ITARMY_COPIES=4
+fi
+
+need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; exit 1; }; }
+backup_if_exists() { local f="$1"; [[ -e "$f" ]] && cp -a "$f" "${f}.BACKUP.$(date +%Y%m%d-%H%M%S)"; }
+cat_as_root() {
+  local path="$1" mode="${2:-0644}"
+  tee "$path" >/dev/null
+  chown root:root "$path"
+  chmod "$mode" "$path"
+}
+
+cat_as_root_append() {
+  local path="$1" mode="${2:-0644}"
+  tee -a "$path" >/dev/null
+  chown root:root "$path"
+  chmod "$mode" "$path"
+}
+
+# =========================
+# 1. Base Setup
+# =========================
+echo "==> 1) Installing base packages and dependencies"
+apt-get update -y
+apt-get install -y ca-certificates curl iproute2 iputils-ping network-manager htop lm-sensors iotop iftop jq bc stress-ng
+
+# =========================
+# POWER OPTIMIZATION SYSTEM DOCUMENTATION
+# =========================
+# This system provides comprehensive power management while preserving
+# network performance for MHDDOS. All features are configurable via
+# variables at the top of this script.
+#
+# Key Features:
+# - Dynamic CPU frequency scaling (day/night modes)
+# - WiFi power management (disabled by default for max performance)
+# - Peripheral power saving (Bluetooth, HDMI, LEDs)
+# - USB power management (auto-suspend for non-critical devices)
+# - Storage optimizations (noatime, dirty page tuning)
+# - Memory optimizations (zswap, swappiness)
+# - Thermal management
+# - Kernel network tuning
+#
+# Configuration:
+# All settings are configurable via variables at the top of the script.
+# Default settings are optimized for MHDDOS performance with balanced
+# power consumption.
+#
+# Logging:
+# All power optimizations are logged to /var/log/mhddos/setup.log
+# Runtime adjustments are logged to /var/log/mhddos/resource-monitor.log
+#
+# Verification:
+# After setup, verify your configuration with:
+# cat /var/log/mhddos/setup.log
+# =========================
+
+
+# =========================
+# 2. Network Interface Selection and Optimization for MHDDOS
+# =========================
+echo "==> 2) Configuring optimal network interface for MHDDOS"
+
+# 1. Check available wireless interfaces
+AVAILABLE_WLAN=$(ip -o link show | awk -F': ' '$2 ~ /^wlan/ {print $2}' | sort)
+echo "Available wireless interfaces: $AVAILABLE_WLAN"
+
+# 2. Select interface (prefer wlan1 if available, otherwise wlan0)
+if echo "$AVAILABLE_WLAN" | grep -q "wlan1"; then
+    IFACE="wlan1"
+    echo "Selected wlan1 for better performance and isolation"
+    # Disable wlan0 to prevent conflicts
+    ip link set wlan0 down 2>/dev/null || true
+    iw dev wlan0 set type managed 2>/dev/null || true
+else
+    IFACE="wlan0"
+    echo "Using wlan0 (wlan1 not available)"
+fi
+
+# Export chosen interface for child processes launched from this script
+export IFACE
+
+# 3. Optimize the selected interface for MHDDOS
+echo "Optimizing $IFACE for high-throughput operation"
+# Disable power saving completely
+nmcli dev set "$IFACE" wifi.powersave 0 2>/dev/null || true
+nmcli con mod "$IFACE" wifi.powersave 0 2>/dev/null || true
+nmcli con mod "$IFACE" 802-11-wireless.powersave 0 2>/dev/null || true
+
+# Increase TX power (if supported)
+iw reg set US 2>/dev/null || true  # Set to US regulatory domain for max power
+iwconfig "$IFACE" txpower 30 2>/dev/null || true  # Set max transmit power
+
+# Enable TCP optimizations for high throughput
+SYSCTL_DROPIN="/etc/sysctl.d/99-custom-net-tuning.conf"
+cat <<'EOF' | cat_as_root "$SYSCTL_DROPIN" 0644
+# Network tuning (generic)
+net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+net.ipv4.tcp_rmem=4096 87380 16777216
+net.ipv4.tcp_wmem=4096 65536 16777216
+net.ipv4.tcp_congestion_control=bbr
+net.ipv4.tcp_tw_reuse=1
+net.ipv4.tcp_fin_timeout=30
+EOF
+sysctl --system >/dev/null 2>&1
+
+
+# 4. Disable all other wireless interfaces
+for iface in $(echo "$AVAILABLE_WLAN" | grep -v "$IFACE"); do
+    echo "Disabling $iface to prevent interference"
+    ip link set "$iface" down 2>/dev/null || true
+    iw dev "$iface" set type managed 2>/dev/null || true
+done
+
+# 5. Verify configuration
+echo "Active wireless interface:"
+ip -o link show "$IFACE"
+echo "Power save setting:"
+nmcli -f WIRELESS-PROPERTIES.WIFI.POWERSAVE dev show "$IFACE" 2>/dev/null | grep -i powersave || true
+echo "TX Power:"
+iwconfig "$IFACE" 2>/dev/null | grep "Tx-Power"
+echo "TCP congestion control:"
+sysctl net.ipv4.tcp_congestion_control 2>/dev/null
+
+# =========================
+# Power Optimization for MHDDOS (Network-Preserving)
+# =========================
+echo "==> Applying power optimizations (network performance preserved)"
+
+# 1. CPU Optimization
+echo "Configuring CPU governor to $CPU_GOVERNOR"
+echo "$CPU_GOVERNOR" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null
+echo "$CPU_MAX_FREQ_DAY" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
+
+# 2. WiFi Optimization
+if [[ "$WIFI_POWER_SAVE" -eq 0 ]]; then
+    echo "Disabling WiFi power save for maximum throughput"
+    # ... existing WiFi power save disable code ...
+fi
+iwconfig "$IFACE" txpower $WIFI_TX_POWER 2>/dev/null
+
+# 3. Disable Unused Peripherals
+if [[ "$DISABLE_BLUETOOTH" -eq 1 ]]; then
+    echo "Disabling Bluetooth"
+    rfkill block bluetooth 2>/dev/null || true
+    systemctl stop bluetooth 2>/dev/null || true
+    systemctl disable bluetooth 2>/dev/null || true
+fi
+
+if [[ "$DISABLE_HDMI" -eq 1 ]]; then
+    echo "Disabling HDMI"
+    /usr/bin/tvservice -o 2>/dev/null || true
+fi
+
+if [[ "$DISABLE_LEDS" -eq 1 ]]; then
+    echo "Disabling activity LEDs"
+    echo 0 | sudo tee /sys/class/leds/led0/trigger 2>/dev/null || true
+fi
+
+# 4. USB Optimization
+if [[ "$USB_AUTOSUSPEND" -eq 1 ]]; then
+    echo "Enabling USB auto-suspend"
+    for usb in /sys/bus/usb/devices/*/power/control; do
+        echo auto > "$usb" 2>/dev/null || true
+    done
+fi
+
+# 5. Storage Optimization
+if [[ "$ENABLE_NOATIME" -eq 1 ]]; then
+    mount -o remount,noatime,nodiratime / 2>/dev/null
+fi
+
+# 6. Memory Optimization
+if [[ "$ENABLE_ZSWAP" -eq 1 ]]; then
+    echo "1" | tee /sys/module/zswap/parameters/enabled 2>/dev/null
+fi
+sysctl -w vm.swappiness=$SWAPPINESS >/dev/null 2>&1
+
+# 7. Thermal Management
+echo "$((THERMAL_LIMIT*1000))" | tee /sys/class/thermal/thermal_zone0/trip_point_0_temp 2>/dev/null
+
+# 8. Kernel Tuning for Network Performance
+echo "Optimizing kernel for network performance"
+sysctl -w net.core.somaxconn=4096          # Increase socket backlog
+sysctl -w net.ipv4.tcp_max_syn_backlog=8192
+sysctl -w net.ipv4.tcp_tw_reuse=1          # Enable TCP connection reuse
+sysctl -w net.ipv4.tcp_fin_timeout=15      # Reduce FIN timeout
+sysctl -w net.ipv4.tcp_keepalive_time=60   # Reduce keepalive frequency
+
+# Log all power optimizations
+{
+echo "$(date -Is) POWER OPTIMIZATIONS APPLIED:"
+echo "CPU Governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
+echo "CPU Max Freq: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq)"
+echo "WiFi Power Save: $(iw dev $IFACE get power_save)"
+echo "WiFi TX Power: $(iwconfig $IFACE | grep "Tx-Power")"
+echo "Bluetooth Status: $(rfkill list bluetooth | grep -c "Soft blocked: yes")"
+echo "HDMI Status: $(vcgencmd display_power)"
+echo "USB Auto-Suspend: $(cat /sys/bus/usb/devices/*/power/autosuspend_delay_ms | head -1)"
+echo "Filesystem Mount Options: $(mount | grep "on / ")"
+echo "Swapiness: $(sysctl vm.swappiness | awk '{print $3}')"
+echo "Thermal Limit: $(cat /sys/class/thermal/thermal_zone0/trip_point_0_temp)"
+} >> "/var/log/mhddos/setup.log"
+
+
+# =========================
+# 3. Create mhddos.ini with time-aware settings
+# =========================
+echo "==> 3) Creating time-aware mhddos.ini"
+INI_PATH="/opt/itarmy/bin/mhddos.ini"
+mkdir -p "$(dirname "$INI_PATH")"
+
+# Initial conservative settings (will be adjusted by monitor)
+cat <<EOF | cat_as_root "$INI_PATH" 0644
+# Змінити мову | Change language (ua | en | es | de | pl | lt)
+lang = ${ITARMY_LANG}
+
+# Запуск декількох копій (auto для максимального значення, потрібно 3+ ядер процесору та стабільний інтернет)
+# Run multiple copies (set "auto" for max value, requires 3+ core CPU and stable network)
+copies = ${ITARMY_COPIES}
+
+# Кількість потоків на 1 копію | Number of threads per copy
+# Для активації приберіть символ # | Remove the # symbol to enable 
+threads = ${ITARMY_THREADS}
+
+# Атака через мій IP у % від 0 до 100 (обов'язковий VPN чи віддалений сервер)
+# Use my IP for the attack in % from 0 to 100 (requires VPN or remote server)
+use-my-ip = 0
+
+user-id = $(printf '%s' "$ITARMY_USER_ID" | base64 -d)
+EOF
+
+# =========================
+# 4. Install MHDDOS Proxy Binary
+# =========================
+echo "==> 4) Downloading and installing MHDDOS proxy binary"
+mkdir -p "${ITARMY_INSTALLER_PATH}"
+
+# Download the binary directly
+echo "Downloading MHDDOS proxy binary from ${ITARMY_INSTALL_URL}"
+if ! curl -fsSL "${ITARMY_INSTALL_URL}" -o "${ITARMY_BIN}" ; then
+    echo "ERROR: Failed to download MHDDOS binary from ${ITARMY_INSTALL_URL}"
+    echo "Attempting alternative download method..."
+    if ! wget -q "${ITARMY_INSTALL_URL}" -O "${ITARMY_BIN}" ; then
+        echo "ERROR: All download attempts failed. Check your internet connection."
+        exit 1
+    fi
+fi
+
+# Set permissions
+chmod +x "${ITARMY_BIN}"
+chown root:root "${ITARMY_BIN}"
+
+# Verify the binary
+if ! file "${ITARMY_BIN}" | grep -q "ELF"; then
+    echo "ERROR: Downloaded file is not a valid binary"
+    rm -f "${ITARMY_BIN}"
+    exit 1
+fi
+
+echo "MHDDOS binary installed successfully at ${ITARMY_BIN}"
+
+# =========================
+# 5. Install MHDDOS Service
+# =========================
+echo "==> 5) Installing MHDDOS systemd service"
+
+# Create service file
+cat <<EOF | cat_as_root /etc/systemd/system/mhddos_proxy_linux.service 0644
+[Unit]
+Description=MHDDOS Proxy Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${ITARMY_INSTALLER_PATH}
+ExecStart=${ITARMY_BIN}
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+LimitNOFILE=1000000
+TasksMax=infinity
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Enable and start the service
+systemctl daemon-reload
+systemctl enable mhddos_proxy_linux.service
+echo "MHDDOS service installed and enabled"
+
+
+# =========================
+# 6. Install Network Watchdog
+# =========================
+echo "==> 6) Installing network watchdog"
+cat <<WATCHDOG_SCRIPT | cat_as_root /usr/local/bin/net-watchdog.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+IFACE="${IFACE:-wlan0}"
+MAX_NET_LATENCY="${MAX_NET_LATENCY:-200}"
+
+# Network quality monitoring
+check_network_quality() {
+    local gw=$(ip route | awk '/default/ {print $3}')
+    local latency
+    latency="$(ping -c 3 -q "$gw" 2>/dev/null | awk -F'/' '/rtt/ {print $5}' | cut -d. -f1)"
+    latency="${latency:-0}"
+
+    if ! ip link show "$IFACE" &> /dev/null; then
+        echo "Error: Network interface $IFACE not found"
+        echo "Available interfaces:"
+        ip -o link show | awk -F': ' '{print $2}'
+        return 1
+    fi
+    if [[ "$latency" -gt "$MAX_NET_LATENCY" ]]; then
+        logger -t net-watchdog "High latency detected: ${latency}ms > ${MAX_NET_LATENCY}ms"
+        return 1
+    fi
+
+    if ! ping -c 3 -q 8.8.8.8 &> /dev/null; then
+        echo "Error: No network connectivity detected"
+        return 1
+    fi
+
+    return 0
+
+}
+
+
+
+# Main watchdog logic
+main() {
+    if ! check_network_quality; then
+        systemctl restart NetworkManager
+        sleep 5
+    fi
+}
+main
+WATCHDOG_SCRIPT
+
+# Systemd unit for watchdog
+cat <<EOF | cat_as_root /etc/systemd/system/net-watchdog.service 0644
+[Unit]
+Description=Network Watchdog
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/net-watchdog.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl enable --now net-watchdog.service
+
+# =========================
+# 6. Install QoS Rules (SSH Priority)
+# =========================
+echo "==> 6) Setting up QoS rules for SSH priority"
+cat <<'QOS_SCRIPT' | cat_as_root /usr/local/bin/setup-qos.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+IFACE="${1:-wlan0}"
+modprobe ifb
+ip link add ifb0 type ifb
+ip link set ifb0 up
+
+# Clear existing rules
+tc qdisc del dev "$IFACE" root 2>/dev/null || true
+
+# Create QoS structure
+tc qdisc add dev "$IFACE" root handle 1: htb default 30
+
+# High priority class for SSH (1:10)
+tc class add dev "$IFACE" parent 1: classid 1:10 htb rate 10mbit ceil 20mbit prio 0
+tc qdisc add dev "$IFACE" parent 1:10 handle 110: fq_codel
+
+# Low priority class for MHDDOS (1:20)
+tc class add dev "$IFACE" parent 1: classid 1:20 htb rate 1mbit ceil 5mbit prio 7
+tc qdisc add dev "$IFACE" parent 1:20 handle 120: fq_codel
+
+# Default class (1:30)
+tc class add dev "$IFACE" parent 1: classid 1:30 htb rate 5mbit ceil 20mbit prio 3
+tc qdisc add dev "$IFACE" parent 1:30 handle 130: fq_codel
+
+# Match SSH traffic (high priority)
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip dport 22 0xffff flowid 1:10
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip sport 22 0xffff flowid 1:10
+
+# Pi Connect priority rules (if using port 2222)
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip dport 2222 0xffff flowid 1:10
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip sport 2222 0xffff flowid 1:10
+
+# Match MHDDOS traffic (low priority, marked with fwmark 1)
+tc filter add dev "$IFACE" protocol ip parent 1: prio 2 handle 1 fw flowid 1:20
+QOS_SCRIPT
+
+# Apply QoS rules
+/usr/local/bin/setup-qos.sh "$IFACE"
+
+# =========================
+# 7. Install Resource Monitor with Time Awareness
+# =========================
+echo "==> 7) Installing comprehensive resource monitor"
+cat <<'MONITOR_SCRIPT' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Configuration
+INI_FILE="/opt/itarmy/bin/mhddos.ini"
+SERVICE_NAME="mhddos_proxy_linux"
+SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service.d/90-dynamic-limits.conf"
+LOG_FILE="/var/log/mhddos/resource-monitor.log"
+mkdir -p "/var/log/mhddos"
+MAX_LOAD=4.0
+MAX_TEMP=70
+MAX_NET_LATENCY=200
+
+# Get current time and determine if it's "night time" (full throttle)
+is_night_time() {
+    local now=$(date +%H:%M)
+    [[ "$now" > "$FULL_THROTTLE_START" ]] || [[ "$now" < "$FULL_THROTTLE_END" ]]
+}
+
+# Get system metrics
+get_metrics() {
+    local load=$(uptime | awk -F'load average: ' '{print $2}' | awk '{print $3}' | cut -d, -f1)
+    local cpu=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
+    local mem=$(free | awk '/Mem:/ {printf "%.0f", $3/$2 * 100}')
+    local temp=$(cat /sys/class/thermal/thermal_zone0/temp | awk '{print $1/1000}')
+    local latency=$(ping -c 3 $(ip route | awk '/default/ {print $3}') | tail -1 | awk -F'/' '{print $5}' | cut -d. -f1)
+    local tx_errors=$(ip -s link show "$IFACE" | awk '/TX:/ {print $3}')
+    local rx_errors=$(ip -s link show "$IFACE" | awk '/RX:/ {print $3}')
+    local retries=$(iwconfig "$IFACE" 2>/dev/null | grep -c "Retry" || echo 0)
+
+    # Get MHDDOS-specific metrics
+    local mhddos_pid=$(pgrep -f "mhddos_proxy_linux" | head -1)
+    local mhddos_cpu="0"
+    local mhddos_mem="0"
+    local mhddos_threads="0"
+    if [[ -n "$mhddos_pid" ]]; then
+        mhddos_cpu=$(ps -p $mhddos_pid -o %cpu | tail -1)
+        mhddos_mem=$(ps -p $mhddos_pid -o %mem | tail -1)
+        mhddos_threads=$(ps -p $mhddos_pid -o nlwp | tail -1)
+    fi
+
+    echo "$load $cpu $mem $temp $latency $tx_errors $rx_errors $retries $mhddos_cpu $mhddos_mem $mhddos_threads"
+    echo "$(date -Is) Load=$load, CPU=$cpu%, MEM=$mem%, Temp=${temp}C, Latency=${latency}ms, TX-Err=$tx_errors, RX-Err=$rx_errors, Retries=$retries, MHDDOS-CPU=$mhddos_cpu%, MHDDOS-MEM=$mhddos_mem%, MHDDOS-Threads=$mhddos_threads" >> "$LOG_FILE"
+}
+
+
+
+
+# Update systemd limits
+update_limits() {
+    local cpu_quota=$1
+    local mem_max=$2
+
+    mkdir -p "$(dirname "$SERVICE_UNIT")"
+    
+    {
+      echo "[Service]"
+      echo "CPUQuota=$cpu_quota"
+      echo "MemoryMax=$mem_max"
+      echo "Nice=19"
+    } | cat_as_root "$SERVICE_UNIT" 0644
+    
+    systemctl daemon-reload
+
+}
+
+# Adjust settings based on metrics
+adjust_settings() {
+    read load cpu mem temp latency <<< $(get_metrics)
+    local changed=0
+    local night_time=$(is_night_time && echo "1" || echo "0")
+
+    # EMERGENCY: If any critical threshold exceeded
+    if (( $(echo "$load > $MAX_LOAD" | bc -l) )) || \
+       (( $(echo "$temp > $MAX_TEMP" | bc -l) )) || \
+       (( $(echo "$latency > $MAX_NET_LATENCY" | bc -l) )); then
+        echo "$(date -Is) EMERGENCY: Threshold exceeded. Scaling DOWN!" >> "$LOG_FILE"
+
+        # Reduce to minimum settings
+        sudo sed -i "s/threads = .*/threads = 128/" "$INI_FILE"
+        sudo sed -i "s/copies = .*/copies = 1/" "$INI_FILE"
+
+        # Set minimum systemd limits
+        update_limits "20%" "256M"
+        changed=1
+    else
+        # Time-based settings
+        if [[ "$night_time" -eq 1 ]]; then
+            # Night time: Full throttle
+            max_cpu=90
+            max_threads=4096
+            max_mem="768M"
+        else
+            # Day time: Conservative
+            max_cpu=60
+            max_threads=2048
+            max_mem="512M"
+        fi
+
+        # Power optimization based on current load
+        if (( $(echo "$load < 2.0" | bc -l) )) && [[ "$night_time" -eq 0 ]]; then
+            echo "$(date -Is) Low load detected. Applying power savings..." >> "$LOG_FILE"
+        
+            # Apply daytime CPU frequency limit
+            echo "$CPU_MAX_FREQ_DAY" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
+        
+            # Enable USB auto-suspend for non-critical devices
+if [[ "$USB_AUTOSUSPEND" -eq 1 ]]; then
+    echo "Enabling USB auto-suspend"
+    for usb in /sys/bus/usb/devices/*/power/control; do
+        echo auto > "$usb" 2>/dev/null || true
+    done
+fi
+                done
+            fi
+        
+            # Reduce filesystem sync frequency
+            sysctl -w vm.dirty_writeback_centisecs=$DIRTY_WRITEBACK_LOW >/dev/null 2>&1
+        elif (( $(echo "$load > 4.0" | bc -l) )) || [[ "$night_time" -eq 1 ]]; then
+            echo "$(date -Is) High load or night time. Maximizing performance..." >> "$LOG_FILE"
+        
+            # Restore full CPU frequency
+            echo "$CPU_MAX_FREQ_NIGHT" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
+        
+            # Disable USB auto-suspend for all devices
+if [[ "$USB_AUTOSUSPEND" -eq 1 ]]; then
+    echo "Enabling USB auto-suspend"
+    for usb in /sys/bus/usb/devices/*/power/control; do
+        echo auto > "$usb" 2>/dev/null || true
+    done
+fi
+        
+            # Increase filesystem performance
+            sysctl -w vm.dirty_writeback_centisecs=$DIRTY_WRITEBACK_HIGH >/dev/null 2>&1
+        fi
+
+        # Scale based on current usage
+        if (( $(echo "$cpu > $max_cpu" | bc -l) )) || (( $(echo "$mem > 85" | bc -l) )); then
+            echo "$(date -Is) High resource usage. Scaling DOWN..." >> "$LOG_FILE"
+
+            # Reduce threads
+            local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
+            if [[ $threads -gt 256 ]]; then
+                threads=$((threads - 256))
+                sudo sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
+                changed=1
+            fi
+
+            # Reduce systemd CPU quota
+            local current_quota=$(grep "CPUQuota=" "$SERVICE_UNIT" 2>/dev/null | awk -F= '{print $2}' | tr -d '%')
+            if [[ -n "$current_quota" ]] && [[ $current_quota -gt 20 ]]; then
+                new_quota=$((current_quota - 10))
+                update_limits "${new_quota}%" "$max_mem"
+                changed=1
+            fi
+        elif (( $(echo "$cpu < $((max_cpu-20))" | bc -l) )) && \
+             (( $(echo "$mem < 70" | bc -l) )) && \
+             (( $(echo "$load < 2.0" | bc -l) )); then
+            echo "$(date -Is) Low resource usage. Scaling UP..." >> "$LOG_FILE"
+
+            # Increase threads
+            local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
+            if [[ $threads -lt $max_threads ]]; then
+                threads=$((threads + 256))
+                sudo sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
+                changed=1
+            fi
+
+            # Increase systemd CPU quota
+            local current_quota=$(grep "CPUQuota=" "$SERVICE_UNIT" 2>/dev/null | awk -F= '{print $2}' | tr -d '%')
+            if [[ -n "$current_quota" ]] && [[ $current_quota -lt $((max_cpu-10)) ]]; then
+                new_quota=$((current_quota + 10))
+                update_limits "${new_quota}%" "$max_mem"
+                changed=1
+            fi
+        fi
+    fi
+
+    return $changed
+}
+
+# Main monitoring loop
+main() {
+    if adjust_settings; then
+        echo "$(date -Is) Restarting $SERVICE_NAME..." >> "$LOG_FILE"
+        systemctl restart "$SERVICE_NAME"
+    fi
+}
+
+main
+MONITOR_SCRIPT
+
+# Systemd service for monitor
+cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.service 0644
+[Unit]
+Description=Resource Monitor for MHDDOS
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/resource-monitor.sh
+Restart=on-failure
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Systemd timer for monitor (check every 15s)
+cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.timer 0644
+[Unit]
+Description=Run resource monitor every 15s
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=resource-monitor.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Enable and start monitor
+systemctl enable --now resource-monitor.timer
+systemctl start resource-monitor.service
+
+# =========================
+# 8. Install Crash Protection
+# =========================
+echo "==> 8) Setting up crash protection"
+cat <<'CRASH_SCRIPT' | cat_as_root /usr/local/bin/crash-protection.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Check if MHDDOS is running
+# Remove the `if` condition and always run:
+echo "$(date -Is) Checking MHDDOS status..." >> /var/log/mhddos/crash-protection.log
+if ! systemctl is-active --quiet mhddos_proxy_linux; then
+    echo "$(date -Is) MHDDOS crashed. Restarting..." >> /var/log/mhddos/crash-protection.log
+    systemctl restart mhddos_proxy_linux
+    # Reset power optimizations after crash
+    echo "1400000" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
+    for usb in /sys/bus/usb/devices/*; do
+        echo "on" | tee $usb/power/control 2>/dev/null
+    done
+    sysctl -w vm.dirty_writeback_centisecs=500 >/dev/null 2>&1
+    echo "$(date -Is) Reset power optimizations after crash" >> /var/log/mhddos/crash-protection.log
+fi
+
+if grep -q "Restarting too often" /var/log/syslog; then
+    echo "$(date -Is) Too many crashes. Reducing settings..." >> /var/log/mhddos/crash-protection.log
+    sed -i "s/threads = .*/threads = 128/" /opt/itarmy/bin/mhddos.ini
+    sed -i "s/copies = .*/copies = 1/" /opt/itarmy/bin/mhddos.ini
+    systemctl restart mhddos_proxy_linux
+fi
+
+CRASH_SCRIPT
+
+# Systemd service for crash protection
+cat <<EOF | cat_as_root /etc/systemd/system/crash-protection.service 0644
+[Unit]
+Description=Crash Protection for MHDDOS
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/crash-protection.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Systemd timer for crash protection (check every 30s)
+cat <<EOF | cat_as_root /etc/systemd/system/crash-protection.timer 0644
+[Unit]
+Description=Run crash protection every 30s
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=crash-protection.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Enable crash protection
+systemctl enable --now crash-protection.timer
+systemctl start crash-protection.service
+
+# =========================
+# 9. Final Setup
+# =========================
+echo "==> 9) Finalizing setup"
+systemctl daemon-reload
+systemctl enable --now mhddos_proxy_linux.service
+systemctl restart mhddos_proxy_linux
+
+echo "Setup complete!"
+echo "Monitor logs: tail -f /var/log/mhddos/resource-monitor.log"
+echo "Crash logs: tail -f /var/log/mhddos/crash-protection.log"
+echo "System status: htop"
+echo "Temperature: cat /sys/class/thermal/thermal_zone0/temp"
+
+# =========================
+# Final Verification
+# =========================
+echo "==> Running final verification checks"
+
+# Check binary
+if [[ ! -f "${ITARMY_BIN}" ]]; then
+    echo "ERROR: MHDDOS binary not found at ${ITARMY_BIN}"
+    exit 1
+fi
+
+# Check service
+if ! systemctl list-unit-files | grep -q mhddos_proxy_linux.service; then
+    echo "ERROR: MHDDOS service not installed"
+    exit 1
+fi
+
+# Start service if not running
+if ! systemctl is-active mhddos_proxy_linux; then
+    echo "Starting MHDDOS service..."
+    systemctl start mhddos_proxy_linux
+    sleep 5
+fi
+
+# Check service status
+if systemctl is-active mhddos_proxy_linux; then
+    echo "MHDDOS service is running successfully"
+else
+    echo "ERROR: MHDDOS service failed to start"
+    journalctl -u mhddos_proxy_linux -n 20 --no-pager
+    exit 1
+fi
