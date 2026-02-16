@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi4B-02142026-1543 -o /usr/local/bin/mhddos-setup.sh && chmod +x /usr/local/bin/mhddos-setup.sh && echo 'Script installed. Run with: sudo mhddos-setup.sh'"
+
 # =========================
 # MHDDOS Raspberry Pi 4B Optimized Setup
 # Features:
