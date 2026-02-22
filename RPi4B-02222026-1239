@@ -464,6 +464,9 @@ WATCHDOG_SCRIPT
 
 chmod 0755 /usr/local/bin/net-watchdog.sh
 
+
+chmod 0755 /usr/local/bin/net-watchdog.sh
+
 # Systemd unit for watchdog
 cat <<EOF | cat_as_root /etc/systemd/system/net-watchdog.service 0644
 [Unit]
