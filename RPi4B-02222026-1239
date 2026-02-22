@@ -409,7 +409,7 @@ echo "MHDDOS service installed and enabled"
 # 6. Install Network Watchdog
 # =========================
 echo "==> 6) Installing network watchdog"
-cat <<WATCHDOG_SCRIPT | cat_as_root /usr/local/bin/net-watchdog.sh 0755
+cat <<'WATCHDOG_SCRIPT' | cat_as_root /usr/local/bin/net-watchdog.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -419,8 +419,8 @@ MAX_NET_LATENCY="${MAX_NET_LATENCY:-200}"
 # Network quality monitoring
 check_network_quality() {
     local gw
-    gw=$(ip route | awk '/default/ {print $3}')
-    if [ -z "$gw" ]; then
+    gw=$(ip route | awk '/default/ {print $3}' | head -n 1)
+    if [[ -z "$gw" ]]; then
         echo "Error: No default gateway found"
         return 1
     fi
@@ -428,7 +428,7 @@ check_network_quality() {
     local latency_output
     latency_output=$(ping -c 3 -q "$gw" 2>/dev/null)
     local latency
-    latency=$(echo "$latency_output" | awk -F'/' '/rtt/ {print $5}' | cut -d. -f1)
+    latency=$(echo "$latency_output" | awk -F'/' '/rtt/ {print $5}' | awk '{print $1}')
     latency="${latency:-0}"
 
     if ! ip link show "$IFACE" &> /dev/null; then
@@ -450,9 +450,6 @@ check_network_quality() {
 
     return 0
 }
-
-
-
 
 # Main watchdog logic
 main() {
