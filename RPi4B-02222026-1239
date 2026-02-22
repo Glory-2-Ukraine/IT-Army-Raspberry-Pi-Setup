@@ -6,7 +6,6 @@ set -x
 
 # Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi4B-02222026-1239 -o /usr/local/bin/mhddos-setup.sh && chmod +x /usr/local/bin/mhddos-setup.sh && /usr/local/bin/mhddos-setup.sh"
 
-
 # =========================
 # MHDDOS Raspberry Pi 4B Optimized Setup
 # Features:
