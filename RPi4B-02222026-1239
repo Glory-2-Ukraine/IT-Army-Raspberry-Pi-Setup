@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # For debugging
+exec > >(tee -a /var/log/mhddos/setup.log) 2>&1
 set -x
-echo "$(date -Is) Script started" >> /var/log/mhddos/setup.log
-
+echo "$(date -Is) Script started"
 
 # Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi4B-02222026-1239 -o /usr/local/bin/mhddos-setup.sh && chmod +x /usr/local/bin/mhddos-setup.sh && /usr/local/bin/mhddos-setup.sh"
 
@@ -97,7 +97,8 @@ THERMAL_LIMIT=65                    # Thermal trip point (°C)
 # ---- End Tunables ----
 
 mkdir -p /var/log/mhddos
-chown -R $APP_USER:$APP_USER /var/log/mhddos
+chown -R root:root /var/log/mhddos
+chmod -R 755 /var/log/mhddos
 
 # Validate thread/copy limits
 if [[ ${ITARMY_THREADS} -gt 4096 ]]; then
@@ -113,10 +114,14 @@ need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; 
 backup_if_exists() { local f="$1"; [[ -e "$f" ]] && cp -a "$f" "${f}.BACKUP.$(date +%Y%m%d-%H%M%S)"; }
 cat_as_root() {
   local path="$1" mode="${2:-0644}"
-  tee "$path" >/dev/null
+  if ! tee "$path" >/dev/null; then
+      echo "ERROR: Failed to write to $path"
+      exit 1
+  fi
   chown root:root "$path"
   chmod "$mode" "$path"
 }
+
 
 cat_as_root_append() {
   local path="$1" mode="${2:-0644}"
@@ -377,7 +382,7 @@ echo "MHDDOS binary installed successfully at ${ITARMY_BIN}"
 echo "==> 5) Installing MHDDOS systemd service"
 
 # Create service file
-cat <<EOF | cat_as_root /etc/systemd/system/mhddos_proxy_linux.service 0644
+cat > /etc/systemd/system/mhddos_proxy_linux.service <<'EOF'
 [Unit]
 Description=MHDDOS Proxy Service
 After=network-online.target
@@ -399,13 +404,10 @@ TasksMax=infinity
 WantedBy=multi-user.target
 EOF
 
-# Reload systemd to recognize the new service
+chmod 644 /etc/systemd/system/mhddos_proxy_linux.service
 systemctl daemon-reload
-
-# Enable and start the service
+sleep 2
 systemctl enable mhddos_proxy_linux.service
-echo "MHDDOS service installed and enabled"
-
 
 # =========================
 # 6. Install Network Watchdog
@@ -420,19 +422,12 @@ MAX_NET_LATENCY="${MAX_NET_LATENCY:-200}"
 
 check_network_quality() {
     local gw
-    gw=$(ip route | awk '/default/ {print $3}' | head -n 1) || gw=""
-    if [[ -z "$gw" ]]; then
-        echo "Error: No default gateway found"
-        return 1
-    fi
+    gw=$(ip route | awk '/default/ {print $3}' | head -n 1) || { echo "No default gateway found"; return 1; }
 
     local latency_output
-    if ! latency_output=$(ping -c 3 -q "$gw" 2>/dev/null); then
-        latency_output=""
-    fi
+    latency_output=$(ping -c 3 -q "$gw" 2>/dev/null || echo "")
     local latency
     latency=$(echo "$latency_output" | awk -F'/' '/rtt/ {print $5}' | awk '{print $1}' || echo 0)
-    latency="${latency:-0}"
 
     if ! ip link show "$IFACE" &> /dev/null; then
         echo "Error: Network interface $IFACE not found"
@@ -456,13 +451,17 @@ check_network_quality() {
 
 main() {
     if ! check_network_quality; then
-        systemctl restart NetworkManager
+        if systemctl is-active --quiet NetworkManager; then
+            systemctl restart NetworkManager
+        else
+            echo "NetworkManager is not running"
+        fi
         sleep 5
     fi
 }
-
 main
 WATCHDOG_SCRIPT
+
 
 chmod 0755 /usr/local/bin/net-watchdog.sh
 
@@ -527,7 +526,13 @@ tc filter add dev "$IFACE" protocol ip parent 1: prio 2 handle 1 fw flowid 1:20
 QOS_SCRIPT
 
 # Apply QoS rules
-/usr/local/bin/setup-qos.sh "$IFACE"
+sleep 2
+if ip link show "$IFACE" >/dev/null 2>&1; then
+    /usr/local/bin/setup-qos.sh "$IFACE"
+else
+    echo "ERROR: Network interface $IFACE not ready"
+fi
+
 
 # =========================
 # 7. Install Resource Monitor with Time Awareness
@@ -565,7 +570,7 @@ get_metrics() {
     local retries=$(iwconfig "$IFACE" 2>/dev/null | grep -c "Retry" || echo 0)
 
     # Get MHDDOS-specific metrics
-    local mhddos_pid=$(pgrep -f "mhddos_proxy_linux" | head -1)
+    local mhddos_pid=$(pgrep -f "/opt/itarmy/bin/mhddos_proxy_linux" | head -1)
     local mhddos_cpu="0"
     local mhddos_mem="0"
     local mhddos_threads="0"
@@ -775,6 +780,11 @@ echo "$(date -Is) Checking MHDDOS status..." >> /var/log/mhddos/crash-protection
 if ! systemctl is-active --quiet mhddos_proxy_linux; then
     echo "$(date -Is) MHDDOS crashed. Restarting..." >> /var/log/mhddos/crash-protection.log
     systemctl restart mhddos_proxy_linux
+    sleep 2
+    if ! systemctl is-active --quiet mhddos_proxy_linux; then
+        echo "Failed to restart MHDDOS service"
+    fi
+
     # Reset power optimizations after crash
     echo "1400000" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
     for usb in /sys/bus/usb/devices/*; do
@@ -788,7 +798,12 @@ if grep -q "Restarting too often" /var/log/syslog; then
     echo "$(date -Is) Too many crashes. Reducing settings..." >> /var/log/mhddos/crash-protection.log
     sed -i "s/threads = .*/threads = 128/" /opt/itarmy/bin/mhddos.ini
     sed -i "s/copies = .*/copies = 1/" /opt/itarmy/bin/mhddos.ini
-    systemctl restart mhddos_proxy_linux
+    ssystemctl restart mhddos_proxy_linux
+    sleep 2
+    if ! systemctl is-active --quiet mhddos_proxy_linux; then
+        echo "Failed to restart MHDDOS service"
+    fi
+
 fi
 
 CRASH_SCRIPT
@@ -861,10 +876,23 @@ fi
 # Reload systemd to ensure the service is recognized
 systemctl daemon-reload
 
-# Check service
-if ! systemctl list-unit-files | grep -q mhddos_proxy_linux.service; then
-    echo "ERROR: MHDDOS service not installed"
+# Check service file
+if [[ ! -f "/etc/systemd/system/mhddos_proxy_linux.service" ]]; then
+    echo "ERROR: MHDDOS service file not found"
     exit 1
+fi
+
+# Reload systemd to ensure the service is recognized
+systemctl daemon-reload
+
+# Check service
+if ! systemctl list-units --no-pager | grep -q mhddos_proxy_linux.service; then
+    echo "ERROR: MHDDOS service not recognized by systemd"
+    systemctl daemon-reload
+    sleep 2
+    if ! systemctl list-units --no-pager | grep -q mhddos_proxy_linux.service; then
+        exit 1
+    fi
 fi
 
 # Check if service is enabled
@@ -877,7 +905,7 @@ fi
 if ! systemctl is-active mhddos_proxy_linux; then
     echo "Starting MHDDOS service..."
     systemctl start mhddos_proxy_linux
-    sleep 5
+    sleep 2
 fi
 
 # Check service status
@@ -888,3 +916,4 @@ else
     journalctl -u mhddos_proxy_linux -n 20 --no-pager
     exit 1
 fi
+
