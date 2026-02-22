@@ -244,20 +244,28 @@ iwconfig "$IFACE" txpower $WIFI_TX_POWER 2>/dev/null
 
 # 3. Disable Unused Peripherals
 if [[ "$DISABLE_BLUETOOTH" -eq 1 ]]; then
-    # ... existing Bluetooth disable code ...
+    echo "Disabling Bluetooth"
+    rfkill block bluetooth 2>/dev/null || true
+    systemctl stop bluetooth 2>/dev/null || true
+    systemctl disable bluetooth 2>/dev/null || true
 fi
 
 if [[ "$DISABLE_HDMI" -eq 1 ]]; then
-    # ... existing HDMI disable code ...
+    echo "Disabling HDMI"
+    /usr/bin/tvservice -o 2>/dev/null || true
 fi
 
 if [[ "$DISABLE_LEDS" -eq 1 ]]; then
-    # ... existing LED disable code ...
+    echo "Disabling activity LEDs"
+    echo 0 | sudo tee /sys/class/leds/led0/trigger 2>/dev/null || true
 fi
 
 # 4. USB Optimization
 if [[ "$USB_AUTOSUSPEND" -eq 1 ]]; then
-    # ... existing USB auto-suspend code ...
+    echo "Enabling USB auto-suspend"
+    for usb in /sys/bus/usb/devices/*/power/control; do
+        echo auto > "$usb" 2>/dev/null || true
+    done
 fi
 
 # 5. Storage Optimization
