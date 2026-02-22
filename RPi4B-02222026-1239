@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi4B-02142026-1543 -o /usr/local/bin/mhddos-setup.sh && chmod +x /usr/local/bin/mhddos-setup.sh && echo 'Script installed. Run with: sudo mhddos-setup.sh'"
+# Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi4B-02222026-1239 -o /usr/local/bin/mhddos-setup.sh && chmod +x /usr/local/bin/mhddos-setup.sh && /usr/local/bin/mhddos-setup.sh"
+
 
 # =========================
 # MHDDOS Raspberry Pi 4B Optimized Setup
@@ -90,6 +91,9 @@ THERMAL_LIMIT=65                    # Thermal trip point (°C)
 
 
 # ---- End Tunables ----
+
+mkdir -p /var/log/mhddos
+chown -R $APP_USER:$APP_USER /var/log/mhddos
 
 # Validate thread/copy limits
 if [[ ${ITARMY_THREADS} -gt 4096 ]]; then
@@ -257,7 +261,7 @@ fi
 
 if [[ "$DISABLE_LEDS" -eq 1 ]]; then
     echo "Disabling activity LEDs"
-    echo 0 | sudo tee /sys/class/leds/led0/trigger 2>/dev/null || true
+    echo 0 | tee /sys/class/leds/led0/trigger 2>/dev/null || true
 fi
 
 # 4. USB Optimization
