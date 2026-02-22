@@ -377,7 +377,7 @@ echo "MHDDOS binary installed successfully at ${ITARMY_BIN}"
 echo "==> 5) Installing MHDDOS systemd service"
 
 # Create service file
-cat > /etc/systemd/system/mhddos_proxy_linux.service <<'EOF'
+cat <<EOF | cat_as_root /etc/systemd/system/mhddos_proxy_linux.service 0644
 [Unit]
 Description=MHDDOS Proxy Service
 After=network-online.target
@@ -398,9 +398,6 @@ TasksMax=infinity
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# Set permissions
-chmod 644 /etc/systemd/system/mhddos_proxy_linux.service
 
 # Reload systemd to recognize the new service
 systemctl daemon-reload
@@ -423,7 +420,7 @@ MAX_NET_LATENCY="${MAX_NET_LATENCY:-200}"
 
 check_network_quality() {
     local gw
-    gw=$(ip route | awk '/default/ {print $3}' | head -n 1)
+    gw=$(ip route | awk '/default/ {print $3}' | head -n 1) || gw=""
     if [[ -z "$gw" ]]; then
         echo "Error: No default gateway found"
         return 1
@@ -466,9 +463,6 @@ main() {
 
 main
 WATCHDOG_SCRIPT
-
-chmod 0755 /usr/local/bin/net-watchdog.sh
-
 
 chmod 0755 /usr/local/bin/net-watchdog.sh
 
@@ -871,6 +865,12 @@ systemctl daemon-reload
 if ! systemctl list-unit-files | grep -q mhddos_proxy_linux.service; then
     echo "ERROR: MHDDOS service not installed"
     exit 1
+fi
+
+# Check if service is enabled
+if ! systemctl is-enabled mhddos_proxy_linux; then
+    echo "Enabling MHDDOS service..."
+    systemctl enable mhddos_proxy_linux
 fi
 
 # Start service if not running
