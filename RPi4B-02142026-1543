@@ -236,8 +236,10 @@ echo "$CPU_MAX_FREQ_DAY" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_
 # 2. WiFi Optimization
 if [[ "$WIFI_POWER_SAVE" -eq 0 ]]; then
     echo "Disabling WiFi power save for maximum throughput"
-    # ... existing WiFi power save disable code ...
+    iw dev "$IFACE" set power_save off 2>/dev/null || true
+    nmcli dev wifi powersave 0 ifname "$IFACE" 2>/dev/null || true
 fi
+
 iwconfig "$IFACE" txpower $WIFI_TX_POWER 2>/dev/null
 
 # 3. Disable Unused Peripherals
