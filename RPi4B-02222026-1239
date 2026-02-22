@@ -418,9 +418,17 @@ MAX_NET_LATENCY="${MAX_NET_LATENCY:-200}"
 
 # Network quality monitoring
 check_network_quality() {
-    local gw=$(ip route | awk '/default/ {print $3}')
+    local gw
+    gw=$(ip route | awk '/default/ {print $3}')
+    if [ -z "$gw" ]; then
+        echo "Error: No default gateway found"
+        return 1
+    fi
+
+    local latency_output
+    latency_output=$(ping -c 3 -q "$gw" 2>/dev/null)
     local latency
-    latency="$(ping -c 3 -q "$gw" 2>/dev/null | awk -F'/' '/rtt/ {print $5}' | cut -d. -f1)"
+    latency=$(echo "$latency_output" | awk -F'/' '/rtt/ {print $5}' | cut -d. -f1)
     latency="${latency:-0}"
 
     if ! ip link show "$IFACE" &> /dev/null; then
@@ -429,6 +437,7 @@ check_network_quality() {
         ip -o link show | awk -F': ' '{print $2}'
         return 1
     fi
+
     if [[ "$latency" -gt "$MAX_NET_LATENCY" ]]; then
         logger -t net-watchdog "High latency detected: ${latency}ms > ${MAX_NET_LATENCY}ms"
         return 1
@@ -440,8 +449,8 @@ check_network_quality() {
     fi
 
     return 0
-
 }
+
 
 
 
