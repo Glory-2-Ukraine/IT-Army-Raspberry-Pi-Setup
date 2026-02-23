@@ -351,8 +351,9 @@ EOF
 # =========================
 echo "==> 4) Downloading and installing MHDDOS proxy binary"
 
-# Remove existing binary if it exists
+# Remove existing binary if it exists and kill any processes using it
 rm -f "${ITARMY_BIN}"
+pkill -f mhddos_proxy_linux || true
 
 # Ensure the target directory exists
 mkdir -p "${ITARMY_INSTALLER_PATH}"
@@ -360,14 +361,23 @@ mkdir -p "${ITARMY_INSTALLER_PATH}"
 # Download the binary to a temporary file
 TEMP_BIN=$(mktemp)
 echo "Downloading MHDDOS proxy binary from ${ITARMY_INSTALL_URL}"
-if ! curl -fsSL "${ITARMY_INSTALL_URL}" -o "${TEMP_BIN}"; then
+
+# Use curl with retry logic
+if ! curl -fL --retry 3 --retry-delay 5 "${ITARMY_INSTALL_URL}" -o "${TEMP_BIN}"; then
     echo "ERROR: Failed to download MHDDOS binary from ${ITARMY_INSTALL_URL}"
-    echo "Attempting alternative download method..."
-    if ! wget -q "${ITARMY_INSTALL_URL}" -O "${TEMP_BIN}"; then
+    echo "Attempting alternative download method with wget..."
+    if ! wget --tries=3 --wait=5 -q "${ITARMY_INSTALL_URL}" -O "${TEMP_BIN}"; then
         echo "ERROR: All download attempts failed. Check your internet connection."
         rm -f "${TEMP_BIN}"
         exit 1
     fi
+fi
+
+# Verify the downloaded file
+if ! file "${TEMP_BIN}" | grep -q "ELF"; then
+    echo "ERROR: Downloaded file is not a valid binary"
+    rm -f "${TEMP_BIN}"
+    exit 1
 fi
 
 # Move the temporary file to the target location
@@ -376,13 +386,6 @@ mv "${TEMP_BIN}" "${ITARMY_BIN}"
 # Set permissions
 chmod +x "${ITARMY_BIN}"
 chown root:root "${ITARMY_BIN}"
-
-# Verify the binary
-if ! file "${ITARMY_BIN}" | grep -q "ELF"; then
-    echo "ERROR: Downloaded file is not a valid binary"
-    rm -f "${ITARMY_BIN}"
-    exit 1
-fi
 
 echo "MHDDOS binary installed successfully at ${ITARMY_BIN}"
 
