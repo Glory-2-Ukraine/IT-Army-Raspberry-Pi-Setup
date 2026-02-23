@@ -351,12 +351,18 @@ EOF
 # =========================
 echo "==> 4) Downloading and installing MHDDOS proxy binary"
 
-# Remove existing binary if it exists and kill any processes using it
-rm -f "${ITARMY_BIN}"
-pkill -f mhddos_proxy_linux || true
+# Forcefully terminate any processes using the binary
+sudo pkill -9 -f mhddos_proxy_linux || true
+sudo pkill -9 -f /opt/itarmy/bin/mhddos_proxy_linux || true
+sudo lsof +D /opt/itarmy/bin/ | awk '/mhddos_proxy_linux/ {print $2}' | xargs -r sudo kill -9 || true
+
+# Remove existing binary if it exists
+sudo rm -f "${ITARMY_BIN}"
 
 # Ensure the target directory exists
-mkdir -p "${ITARMY_INSTALLER_PATH}"
+sudo mkdir -p "${ITARMY_INSTALLER_PATH}"
+sudo chown root:root "${ITARMY_INSTALLER_PATH}"
+sudo chmod 755 "${ITARMY_INSTALLER_PATH}"
 
 # Download the binary to a temporary file
 TEMP_BIN=$(mktemp)
@@ -381,14 +387,13 @@ if ! file "${TEMP_BIN}" | grep -q "ELF"; then
 fi
 
 # Move the temporary file to the target location
-mv "${TEMP_BIN}" "${ITARMY_BIN}"
+sudo mv "${TEMP_BIN}" "${ITARMY_BIN}"
 
 # Set permissions
-chmod +x "${ITARMY_BIN}"
-chown root:root "${ITARMY_BIN}"
+sudo chmod +x "${ITARMY_BIN}"
+sudo chown root:root "${ITARMY_BIN}"
 
 echo "MHDDOS binary installed successfully at ${ITARMY_BIN}"
-
 
 # =========================
 # 5. Install MHDDOS Service
