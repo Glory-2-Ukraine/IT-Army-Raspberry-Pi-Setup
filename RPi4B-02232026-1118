@@ -274,12 +274,20 @@ fi
 echo "==> Disabling activity and power LEDs"
 
 # Disable Activity LED (Green)
-echo none | sudo tee /sys/class/leds/ACT/trigger
-echo 0 | sudo tee /sys/class/leds/ACT/brightness
+if [ -e "/sys/class/leds/ACT/trigger" ]; then
+    echo none | sudo tee /sys/class/leds/ACT/trigger
+    echo 0 | sudo tee /sys/class/leds/ACT/brightness
+else
+    echo "Warning: ACT LED trigger not found."
+fi
 
 # Disable Power LED (Red)
-echo none | sudo tee /sys/class/leds/PWR/trigger
-echo 0 | sudo tee /sys/class/leds/PWR/brightness
+if [ -e "/sys/class/leds/PWR/trigger" ]; then
+    echo none | sudo tee /sys/class/leds/PWR/trigger
+    echo 0 | sudo tee /sys/class/leds/PWR/brightness
+else
+    echo "Warning: PWR LED trigger not found."
+fi
 
 # Documentation: How to Turn LEDs Back On
 mkdir -p /var/log/mhddos
@@ -299,12 +307,14 @@ echo 1 | sudo tee /sys/class/leds/PWR/brightness
 
 ## To persist these settings across reboots, add the above commands to /etc/rc.local before 'exit 0'.
 
+## To remove persistence:
+sudo sed -i '/# LED Control/,+4d' /etc/rc.local
 LED_DOC
 
 echo "LEDs disabled. Documentation on how to re-enable them is saved in /var/log/mhddos/led_control.txt"
 
 # Persist LED settings across reboots
-if ! grep -q "LED Control" /etc/rc.local; then
+if ! grep -q "echo none > /sys/class/leds/ACT/trigger" /etc/rc.local; then
     echo "# LED Control" | sudo tee -a /etc/rc.local > /dev/null
     echo "echo none > /sys/class/leds/ACT/trigger" | sudo tee -a /etc/rc.local > /dev/null
     echo "echo 0 > /sys/class/leds/ACT/brightness" | sudo tee -a /etc/rc.local > /dev/null
