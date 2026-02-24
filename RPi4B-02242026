@@ -60,8 +60,8 @@ ITARMY_INSTALLER_PATH="${ITARMY_INSTALLER_PATH:-/opt/itarmy/bin/}"
 ITARMY_BIN="/opt/itarmy/bin/mhddos_proxy_linux"
 ITARMY_LANG="${ITARMY_LANG:-en}"
 ITARMY_USER_ID="${ITARMY_USER_ID:-NTI3MjIzNzgxNQ==}"
-ITARMY_COPIES="${ITARMY_COPIES:-auto}"
-ITARMY_THREADS="${ITARMY_THREADS:-2048}"
+ITARMY_COPIES="${ITARMY_COPIES:-1}"  # Default to 1 copy (was 2)
+ITARMY_THREADS="${ITARMY_THREADS:-256}"  # Default to 256 threads (was 2048)
 
 # ---- Power Optimization Tunables ----
 # CPU Optimization
@@ -75,11 +75,11 @@ WIFI_TX_POWER=30                    # TX power level (15-30)
 
 # Peripheral Management
 DISABLE_BLUETOOTH=1                 # 1=disable Bluetooth
-DISABLE_HDMI=1                      # 1=disable HDMI
+DISABLE_HDMI=0                      # 1=disable HDMI
 DISABLE_LEDS=1                      # 1=disable activity LEDs
 
 # USB Power Management
-USB_AUTOSUSPEND=1                   # 1=enable USB auto-suspend
+USB_AUTOSUSPEND=0                   # 1=enable USB auto-suspend
 
 # Storage Optimization
 ENABLE_NOATIME=1                    # 1=mount with noatime
@@ -397,12 +397,15 @@ Type=simple
 User=root
 WorkingDirectory=/opt/itarmy/bin
 ExecStart=/opt/itarmy/bin/mhddos_proxy_linux
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-LimitNOFILE=1000000
-TasksMax=infinity
+Restart=on-failure
+RestartSec=30s
+StartLimitIntervalSec=300
+StartLimitBurst=3
+CPUQuota=20%
+MemoryMax=256M
+Nice=19
+IOSchedulingClass=3
+WatchdogSec=30s
 
 [Install]
 WantedBy=multi-user.target
@@ -622,11 +625,11 @@ adjust_settings() {
         echo "$(date -Is) EMERGENCY: Threshold exceeded. Scaling DOWN!" >> "$LOG_FILE"
 
         # Reduce to minimum settings
-        sudo sed -i "s/threads = .*/threads = 128/" "$INI_FILE"
+        sudo sed -i "s/threads = .*/threads = 64/" "$INI_FILE"
         sudo sed -i "s/copies = .*/copies = 1/" "$INI_FILE"
 
         # Set minimum systemd limits
-        update_limits "20%" "256M"
+        update_limits "10%" "128M"
         changed=1
     else
         # Time-based settings
@@ -779,35 +782,25 @@ cat <<'CRASH_SCRIPT' | cat_as_root /usr/local/bin/crash-protection.sh 0755
 set -euo pipefail
 
 # Check if MHDDOS is running
-# Remove the `if` condition and always run:
 echo "$(date -Is) Checking MHDDOS status..." >> /var/log/mhddos/crash-protection.log
 if ! systemctl is-active --quiet mhddos_proxy_linux; then
-    echo "$(date -Is) MHDDOS crashed. Restarting..." >> /var/log/mhddos/crash-protection.log
+    echo "$(date -Is) MHDDOS crashed. Restarting with reduced settings..." >> /var/log/mhddos/crash-protection.log
+    sudo sed -i "s/threads = .*/threads = 64/" /opt/itarmy/bin/mhddos.ini
+    sudo sed -i "s/copies = .*/copies = 1/" /opt/itarmy/bin/mhddos.ini
     systemctl restart mhddos_proxy_linux
     sleep 2
     if ! systemctl is-active --quiet mhddos_proxy_linux; then
-        echo "Failed to restart MHDDOS service"
+        echo "$(date -Is) Failed to restart MHDDOS service. Disabling MHDDOS until manual intervention." >> /var/log/mhddos/crash-protection.log
+        systemctl stop mhddos_proxy_linux
+        systemctl disable mhddos_proxy_linux
     fi
-
-    # Reset power optimizations after crash
-    echo "1400000" | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq 2>/dev/null
-    for usb in /sys/bus/usb/devices/*; do
-        echo "on" | tee $usb/power/control 2>/dev/null
-    done
-    sysctl -w vm.dirty_writeback_centisecs=500 >/dev/null 2>&1
-    echo "$(date -Is) Reset power optimizations after crash" >> /var/log/mhddos/crash-protection.log
 fi
 
+# Check for too many crashes
 if grep -q "Restarting too often" /var/log/syslog; then
-    echo "$(date -Is) Too many crashes. Reducing settings..." >> /var/log/mhddos/crash-protection.log
-    sed -i "s/threads = .*/threads = 128/" /opt/itarmy/bin/mhddos.ini
-    sed -i "s/copies = .*/copies = 1/" /opt/itarmy/bin/mhddos.ini
-    ssystemctl restart mhddos_proxy_linux
-    sleep 2
-    if ! systemctl is-active --quiet mhddos_proxy_linux; then
-        echo "Failed to restart MHDDOS service"
-    fi
-
+    echo "$(date -Is) Too many crashes. Disabling MHDDOS until manual intervention." >> /var/log/mhddos/crash-protection.log
+    systemctl stop mhddos_proxy_linux
+    systemctl disable mhddos_proxy_linux
 fi
 
 CRASH_SCRIPT
