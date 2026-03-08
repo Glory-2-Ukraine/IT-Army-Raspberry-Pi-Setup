@@ -452,9 +452,9 @@ nm_state() {
 
 inc_gw_miss() {
   mkdir -p "$STATE_DIR"
-  local n=0
+  local 
   [[ -f "$GW_MISS_FILE" ]] && n="$(cat "$GW_MISS_FILE" 2>/dev/null || echo 0)"
-  [[ "$n" =~ ^[0-9]+$ ]] || n=0
+  [[ "$n" =~ ^[0-9]+$ ]] || 
   n=$((n+1))
   echo "$n" >"$GW_MISS_FILE" 2>/dev/null || true
   echo "$n"
@@ -982,14 +982,14 @@ install_reachability_reboot_watchdog() {
     echo "echo \"\$n\" >\"\$FAIL_FILE\" 2>/dev/null || true"
     echo "logger -t \"\$TAG\" \"FAIL: reachability down (count=\${n}/\${FAIL_MAX})\""
     echo
-    if (( n >= FAIL_MAX )); then
-        echo "$(date -Is) Rebooting due to reachability failure" >> /var/log/mhddos/reboot.log  # <-- Added this line
-        logger -t "$TAG" "ACTION: rebooting due to sustained reachability failure"
-        /sbin/reboot
-    fi
-
-
+    echo "if (( n >= FAIL_MAX )); then"
+    echo "  echo \"\$(date -Is) Rebooting due to reachability failure\" >> /var/log/mhddos/reboot.log"
+    echo "  logger -t \"\$TAG\" \"ACTION: rebooting due to sustained reachability failure\""
+    echo "  /sbin/reboot"
+    echo "fi"
   } | cat_as_root "$script" 0755
+  # ... rest of the function remains unchanged ...
+}
 
   local svc="/etc/systemd/system/${name}.service"
   local tmr="/etc/systemd/system/${name}.timer"
