@@ -1,4 +1,34 @@
 #!/usr/bin/env bash
+
+# =============================================================================
+# MHDDOS Raspberry Pi 4B Setup - RPi4B-03072026
+# =============================================================================
+# This script automates the installation and configuration of MHDDOS on a
+# Raspberry Pi 4B. It includes:
+# - Dynamic resource monitoring (CPU, memory, temperature, network)
+# - Time-based throttling (full throttle midnight–6am)
+# - QoS rules for SSH and Pi Connect
+# - Crash protection and auto-restart
+# - Power optimizations (WiFi TX power, CPU governor, thermal limits)
+#
+# Usage:
+#   1. Run the following command to download and execute the script:
+#      sudo rm -f /usr/local/bin/mhddos-setup.sh && \
+#      sudo curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi4B-03072026 -o /usr/local/bin/mhddos-setup.sh && \
+#      sudo chmod +x /usr/local/bin/mhddos-setup.sh && \
+#      sudo /usr/local/bin/mhddos-setup.sh
+#
+#   2. Monitor logs with:
+#      tail -f /var/log/mhddos/setup.log
+#      tail -f /var/log/mhddos/resource-monitor.log
+#
+#   3. Verify the service is running:
+#      systemctl status mhddos_proxy_linux
+#
+#   4. Check resource usage:
+#      htop
+# =============================================================================
+
 set -euo pipefail
 
 teardown_previous_install() {
