@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+#
+#
+#  THIS IS RUNNING 4B-51
+#
+#
 
 # For debugging
 exec > >(tee -a /var/log/mhddos/setup.log) 2>&1
