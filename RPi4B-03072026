@@ -942,7 +942,7 @@ enable_watchdog_stack() {
 }
 
 install_reachability_reboot_watchdog() {
-  local name="${1:-net-reach}"
+  local name="${1:-net-reach}"  # <-- Ensure this line is present
   local host1="${REACH_HOST1:-1.1.1.1}"
   local host2="${REACH_HOST2:-8.8.8.8}"
   local fail_max="${REACH_FAIL_MAX:-12}"
@@ -988,7 +988,39 @@ install_reachability_reboot_watchdog() {
     echo "  /sbin/reboot"
     echo "fi"
   } | cat_as_root "$script" 0755
-  # ... rest of the function remains unchanged ...
+
+  local svc="/etc/systemd/system/${name}.service"
+  local tmr="/etc/systemd/system/${name}.timer"
+
+  backup_if_exists "$svc"
+  {
+    echo "[Unit]"
+    echo "Description=Network reachability reboot watchdog (${name})"
+    echo "After=network-online.target"
+    echo "Wants=network-online.target"
+    echo
+    echo "[Service]"
+    echo "Type=oneshot"
+    echo "ExecStart=${script}"
+  } | cat_as_root "$svc" 0644
+
+  backup_if_exists "$tmr"
+  {
+    echo "[Unit]"
+    echo "Description=Run ${name} every ${every}"
+    echo
+    echo "[Timer]"
+    echo "OnBootSec=${every}"
+    echo "OnUnitActiveSec=${every}"
+    echo "AccuracySec=30s"
+    echo "Unit=${name}.service"
+    echo
+    echo "[Install]"
+    echo "WantedBy=timers.target"
+  } | cat_as_root "$tmr" 0644
+
+  systemctl daemon-reload
+  systemctl enable --now "${name}.timer"
 }
 
   local svc="/etc/systemd/system/${name}.service"
