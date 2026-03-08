@@ -31,6 +31,18 @@
 
 set -euo pipefail
 
+# Auto-detect preferred WiFi interface (wlan1 > wlan0)
+if ip link show wlan1 >/dev/null 2>&1; then
+    IFACE="wlan1"
+    echo "Using wlan1 as the primary WiFi interface."
+    ip link set wlan0 down 2>/dev/null || true
+    rfkill block wifi 2>/dev/null || true
+else
+    IFACE="wlan0"
+    echo "Using wlan0 as the primary WiFi interface."
+fi
+export IFACE
+
 teardown_previous_install() {
   echo "==> Teardown: stop/disable/remove prior units (if present)"
 
@@ -977,7 +989,8 @@ install_reachability_reboot_watchdog() {
     echo "n=0"
     echo "[[ -f \"\$FAIL_FILE\" ]] && n=\$(cat \"\$FAIL_FILE\" 2>/dev/null || echo 0)"
     echo "[[ \"\$n\" =~ ^[0-9]+$ ]] || n=0"
-    echo "n=\$((n+1))"
+    echo "n=\$((n + 0))"  # <-- Initialize n as a number to avoid unbound variable
+    echo "n=\$((n + 1))"  # <-- Now safe to increment
     echo "echo \"\$n\" >\"\$FAIL_FILE\" 2>/dev/null || true"
     echo "logger -t \"\$TAG\" \"FAIL: reachability down (count=\${n}/\${FAIL_MAX})\""
     echo
