@@ -31,18 +31,6 @@
 
 set -euo pipefail
 
-# Auto-detect preferred WiFi interface (wlan1 > wlan0)
-if ip link show wlan1 >/dev/null 2>&1; then
-    IFACE="wlan1"
-    echo "Using wlan1 as the primary WiFi interface."
-    ip link set wlan0 down 2>/dev/null || true
-    rfkill block wifi 2>/dev/null || true
-else
-    IFACE="wlan0"
-    echo "Using wlan0 as the primary WiFi interface."
-fi
-export IFACE
-
 teardown_previous_install() {
   echo "==> Teardown: stop/disable/remove prior units (if present)"
 
