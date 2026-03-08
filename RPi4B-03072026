@@ -1087,7 +1087,7 @@ sudo chmod 664 /var/log/mhddos/reboot.log
 echo "==> 14) Install network reachability reboot watchdog (timer-based)"
 REACH_NAME="${REACH_NAME:-net-reach}" REACH_HOST1="${REACH_HOST1:-1.1.1.1}" REACH_HOST2="${REACH_HOST2:-8.8.8.8}" \
 REACH_FAIL_MAX="${REACH_FAIL_MAX:-12}" REACH_EVERY="${REACH_EVERY:-5m}" \
-  /usr/local/bin/service-hardened.sh install-reachability "${REACH_NAME}"
+  /usr/local/bin/service-hardened.sh install-reachability "${REACH_NAME:-net-reach}"
 
 # echo "==> 15) Install app package (optional .deb)"
 #
