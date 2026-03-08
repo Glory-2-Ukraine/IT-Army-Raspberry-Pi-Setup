@@ -31,6 +31,22 @@
 
 set -euo pipefail
 
+backup_if_exists() {
+  local f="$1"
+  if [[ -e "$f" ]]; then
+    local b="${f}.BACKUP.$(date +%Y%m%d-%H%M%S)"
+    cp -a "$f" "$b"
+    echo "Backed up $f -> $b"
+  fi
+}
+
+cat_as_root() {
+  local path="$1" mode="${2:-0644}"
+  tee "$path" >/dev/null
+  chown root:root "$path"
+  chmod "$mode" "$path"
+}
+
 teardown_previous_install() {
   echo "==> Teardown: stop/disable/remove prior units (if present)"
 
@@ -235,22 +251,6 @@ pi_guard() {
 }
 
 have_cmd() { command -v "$1" >/dev/null 2>&1; }
-
-backup_if_exists() {
-  local f="$1"
-  if [[ -e "$f" ]]; then
-    local b="${f}.BACKUP.$(date +%Y%m%d-%H%M%S)"
-    cp -a "$f" "$b"
-    echo "Backed up $f -> $b"
-  fi
-}
-
-cat_as_root() {
-  local path="$1" mode="${2:-0644}"
-  tee "$path" >/dev/null
-  chown root:root "$path"
-  chmod "$mode" "$path"
-}
 
 need_root
 pi_guard
