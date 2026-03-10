@@ -115,7 +115,7 @@ ITARMY_BIN="/opt/itarmy/bin/mhddos_proxy_linux"
 ITARMY_LANG="${ITARMY_LANG:-en}"
 ITARMY_USER_ID="${ITARMY_USER_ID:-NTI3MjIzNzgxNQ==}"
 ITARMY_COPIES="${ITARMY_COPIES:-1}"
-ITARMY_THREADS="${ITARMY_THREADS:-2048}"
+ITARMY_THREADS="${ITARMY_THREADS:-128}"
 
 
 need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; exit 1; }; }
