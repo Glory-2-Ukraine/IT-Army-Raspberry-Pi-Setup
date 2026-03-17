@@ -142,7 +142,7 @@ echo "==> 1) Installing base packages and dependencies"
 apt-get update -y
 sudo apt-get install -y \
   network-manager \
-  openvpn nftables tc-full logrotate \
+  openvpn nftables tc logrotate \
   curl jq bc stress-ng btop bash-completion vim tmux htop rsync ncdu \
   bind9-dnsutils mtr-tiny tcpdump ethtool vnstat traceroute netcat-openbsd \
   sysstat lsof strace smartmontools usbutils pciutils lm-sensors \
