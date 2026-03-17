@@ -142,11 +142,10 @@ echo "==> 1) Installing base packages and dependencies"
 apt-get update -y
 sudo apt-get install -y \
   network-manager \
-  openvpn nftables tc logrotate \
-  curl jq bc stress-ng btop bash-completion vim tmux htop rsync ncdu \
+  openvpn nftables stress-ng btop tmux htop ncdu \
   bind9-dnsutils mtr-tiny tcpdump ethtool vnstat traceroute netcat-openbsd \
-  sysstat lsof strace smartmontools usbutils pciutils lm-sensors \
-  iotop iftop git python3-venv python3-pip moreutils acl
+  sysstat lsof strace smartmontools usbutils pciutils iotop iftop \
+  jq bc moreutils vim python3-venv python3-pip
 
 # =========================
 # POWER OPTIMIZATION SYSTEM DOCUMENTATION
