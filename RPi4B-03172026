@@ -140,7 +140,7 @@ cat_as_root_append() {
 # =========================
 echo "==> 1) Installing base packages and dependencies"
 apt-get update -y
-apt-get install -y ca-certificates curl iproute2 iputils-ping network-manager htop lm-sensors iotop iftop jq bc stress-ng
+apt-get install -y ca-certificates curl iproute2 iputils-ping network-manager htop lm-sensors iotop iftop jq bc stress-ng btop 
 
 # =========================
 # POWER OPTIMIZATION SYSTEM DOCUMENTATION
