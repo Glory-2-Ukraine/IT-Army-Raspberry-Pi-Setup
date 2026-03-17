@@ -140,12 +140,16 @@ cat_as_root_append() {
 # =========================
 echo "==> 1) Installing base packages and dependencies"
 apt-get update -y
-sudo apt-get install -y \
+sudo apt-get update && sudo apt-get install -y \
   network-manager \
-  openvpn nftables stress-ng btop tmux htop ncdu \
+  openvpn nftables logrotate \
+  stress-ng btop tmux htop ncdu \
   bind9-dnsutils mtr-tiny tcpdump ethtool vnstat traceroute netcat-openbsd \
-  sysstat lsof strace smartmontools usbutils pciutils iotop iftop \
-  jq bc moreutils vim python3-venv python3-pip
+  sysstat lsof strace smartmontools usbutils pciutils lm-sensors \
+  iotop iftop nethogs nmon glances dstat smem \
+  jq bc moreutils vim python3-venv python3-pip \
+  neofetch plocate micro trash-cli timeshift unattended-upgrades \
+  netdata fail2ban rclone speedtest-cli
 
 # =========================
 # POWER OPTIMIZATION SYSTEM DOCUMENTATION
