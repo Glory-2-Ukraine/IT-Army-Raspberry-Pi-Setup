@@ -413,6 +413,7 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
+[Service]
 Type=simple
 User=root
 WorkingDirectory=/opt/itarmy/bin
@@ -421,13 +422,14 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
-Nice=19
+Nice=${APP_NICE}
 CPUSchedulingPolicy=other
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 CPUQuota=${APP_CPU_QUOTA_DAY}
 MemoryMax=${APP_MEM_MAX}
 TasksMax=512
+LimitNOFILE=1000000
 OOMScoreAdjust=500
 
 # Lowest practical scheduling priority
@@ -620,13 +622,6 @@ CPU_GOVERNOR="performance"
 USB_AUTOSUSPEND=0
 DIRTY_WRITEBACK_LOW=3000
 DIRTY_WRITEBACK_HIGH=500
-Nice=19
-CPUSchedulingPolicy=other
-IOSchedulingClass=best-effort
-IOSchedulingPriority=7
-CPUQuota=25%
-MemoryMax=512M
-OOMScoreAdjust=500
 
 
 # Get current time and determine if it's "night time" (full throttle)
@@ -695,7 +690,7 @@ update_limits() {
       echo "[Service]"
       echo "CPUQuota=$cpu_quota"
       echo "MemoryMax=$mem_max"
-      echo "Nice=19"
+      echo "Nice=$APP_NICE"
     } > "$SERVICE_UNIT"
     chown root:root "$SERVICE_UNIT"
     chmod 0644 "$SERVICE_UNIT"
@@ -917,7 +912,7 @@ if ! systemctl is-active --quiet foobar_proxy_linux; then
     echo "$(date -Is) Reset power optimizations after crash" >> /var/log/foobar/crash-protection.log
 fi
 
-if grep -q "Restarting too often" /var/log/syslog; then
+if journalctl -u foobar_proxy_linux --no-pager -n 50 2>/dev/null | grep -q "Restarting too often"; then
     echo "$(date -Is) Too many crashes. Reducing settings..." >> /var/log/foobar/crash-protection.log
     sed -i "s/threads = .*/threads = 128/" /opt/itarmy/bin/foobar.ini
     sed -i "s/copies = .*/copies = 1/" /opt/itarmy/bin/foobar.ini
@@ -988,12 +983,6 @@ echo "==> 10) Running final verification checks"
 # Check binary
 if [[ ! -f "${ITARMY_BIN}" ]]; then
     echo "ERROR: FOOBAR binary not found at ${ITARMY_BIN}"
-    exit 1
-fi
-
-# Check service file
-if [[ ! -f "/etc/systemd/system/foobar_proxy_linux.service" ]]; then
-    echo "ERROR: FOOBAR service file not found"
     exit 1
 fi
 
