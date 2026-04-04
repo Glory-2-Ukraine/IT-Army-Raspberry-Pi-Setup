@@ -7,6 +7,16 @@ set -euo pipefail
 #
 
 # For debugging
+need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; exit 1; }; }
+
+need_root
+
+mkdir -p /var/log/foobar
+touch /var/log/foobar/setup.log
+chown -R root:root /var/log/foobar
+chmod -R 755 /var/log/foobar
+
+# For debugging
 exec > >(tee -a /var/log/foobar/setup.log) 2>&1
 set -x
 echo "$(date -Is) Script started"
@@ -183,16 +193,39 @@ echo "==> 2) Configuring optimal network interface for FOOBAR"
 AVAILABLE_WLAN=$(ip -o link show | awk -F': ' '$2 ~ /^wlan/ {print $2}' | sort)
 echo "Available wireless interfaces: $AVAILABLE_WLAN"
 
-# 2. Select interface (prefer wlan1 if available, otherwise wlan0)
+CURRENT_DEFAULT_IFACE=$(ip route | awk '/^default/ {for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}' || true)
+echo "Current default route interface: ${CURRENT_DEFAULT_IFACE:-none}"
+
+# 2. Safely prefer wlan1 only if it is actually usable
 if echo "$AVAILABLE_WLAN" | grep -q "wlan1"; then
-    IFACE="wlan1"
+    echo "wlan1 detected; testing before switching"
+
     nmcli device set wlan1 managed yes 2>/dev/null || true
     ip link set wlan1 up 2>/dev/null || true
-    echo "Selected wlan1 for better performance and isolation"
 
-    nmcli device disconnect wlan0 2>/dev/null || true
-    nmcli device set wlan0 managed no 2>/dev/null || true
-    ip link set wlan0 down 2>/dev/null || true
+    # Give the interface a moment to settle
+    sleep 3
+
+    WLAN1_HAS_IP=0
+    WLAN1_HAS_DEFAULT=0
+
+    ip -4 addr show wlan1 | grep -q 'inet ' && WLAN1_HAS_IP=1
+    ip route | awk '/^default/ {for(i=1;i<=NF;i++) if($i=="dev" && $(i+1)=="wlan1") found=1} END{exit !found}' && WLAN1_HAS_DEFAULT=1 || true
+
+    if [[ "$WLAN1_HAS_IP" -eq 1 && "$WLAN1_HAS_DEFAULT" -eq 1 ]]; then
+        IFACE="wlan1"
+        echo "wlan1 is active and has the default route; switching away from wlan0"
+
+        nmcli device disconnect wlan0 2>/dev/null || true
+        nmcli device set wlan0 managed no 2>/dev/null || true
+        ip link set wlan0 down 2>/dev/null || true
+    else
+        IFACE="wlan0"
+        echo "wlan1 exists but is not yet carrying traffic; keeping wlan0 active"
+
+        nmcli device set wlan0 managed yes 2>/dev/null || true
+        ip link set wlan0 up 2>/dev/null || true
+    fi
 else
     IFACE="wlan0"
     echo "Using wlan0 (wlan1 not available)"
@@ -203,6 +236,18 @@ fi
 
 # Export chosen interface for child processes launched from this script
 export IFACE
+
+# Recovery: if wlan1 was selected but connectivity is not actually up, fall back to wlan0
+if [[ "$IFACE" == "wlan1" ]]; then
+    if ! ip route | awk '/^default/ {for(i=1;i<=NF;i++) if($i=="dev" && $(i+1)=="wlan1") found=1} END{exit !found}'; then
+        echo "wlan1 selected but not carrying default route; restoring wlan0"
+
+        nmcli device set wlan0 managed yes 2>/dev/null || true
+        ip link set wlan0 up 2>/dev/null || true
+        IFACE="wlan0"
+        export IFACE
+    fi
+fi
 
 # 3. Optimize the selected interface for FOOBAR
 echo "Optimizing $IFACE for high-throughput operation"
@@ -231,13 +276,23 @@ sysctl --system >/dev/null 2>&1
 
 
 # 4. Disable all other wireless interfaces
-while IFS= read -r iface; do
-    [[ -n "$iface" ]] || continue
-    echo "Disabling $iface to prevent interference"
-    nmcli device disconnect "$iface" 2>/dev/null || true
-    nmcli device set "$iface" managed no 2>/dev/null || true
-    ip link set "$iface" down 2>/dev/null || true
-done < <(printf '%s\n' "$AVAILABLE_WLAN" | grep -vx "$IFACE" || true)
+if [[ "$IFACE" == "wlan1" ]]; then
+    # wlan1 is confirmed active, so suppress wlan0
+    while IFS= read -r iface; do
+        [[ -n "$iface" ]] || continue
+        echo "Disabling $iface to prevent interference"
+        nmcli device disconnect "$iface" 2>/dev/null || true
+        nmcli device set "$iface" managed no 2>/dev/null || true
+        ip link set "$iface" down 2>/dev/null || true
+    done < <(printf '%s\n' "$AVAILABLE_WLAN" | grep -vx "$IFACE" || true)
+else
+    # Keep wlan1 available as a standby path if wlan0 is still active
+    if echo "$AVAILABLE_WLAN" | grep -q "wlan1"; then
+        echo "Keeping wlan1 available as standby; not disabling it"
+        nmcli device set wlan1 managed yes 2>/dev/null || true
+        ip link set wlan1 up 2>/dev/null || true
+    fi
+fi
 
 # 5. Verify configuration
 echo "Active wireless interface:"
