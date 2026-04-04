@@ -186,6 +186,8 @@ echo "Available wireless interfaces: $AVAILABLE_WLAN"
 # 2. Select interface (prefer wlan1 if available, otherwise wlan0)
 if echo "$AVAILABLE_WLAN" | grep -q "wlan1"; then
     IFACE="wlan1"
+    nmcli device set wlan1 managed yes 2>/dev/null || true
+    ip link set wlan1 up 2>/dev/null || true
     echo "Selected wlan1 for better performance and isolation"
 
     nmcli device disconnect wlan0 2>/dev/null || true
@@ -419,6 +421,14 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+Nice=19
+CPUSchedulingPolicy=other
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUQuota=${APP_CPU_QUOTA_DAY}
+MemoryMax=${APP_MEM_MAX}
+TasksMax=512
+OOMScoreAdjust=500
 
 # Lowest practical scheduling priority
 Nice=${APP_NICE}
@@ -512,9 +522,7 @@ WATCHDOG_SCRIPT
 
 sed -i "s/__SELECTED_IFACE__/$IFACE/g" /usr/local/bin/net-watchdog.sh
 
-systemctl enable --now net-watchdog.service
-
-cat <<EOF | cat_as_root /usr/local/bin/net-watchdog.sh 0644
+cat <<EOF | cat_as_root /etc/systemd/system/net-watchdog.service 0644
 [Unit]
 Description=Network Watchdog
 After=network-online.target
@@ -528,6 +536,9 @@ Restart=on-failure
 WantedBy=multi-user.target
 EOF
 
+systemctl daemon-reload
+systemctl enable --now net-watchdog.service
+
 # =========================
 # 7. Install QoS Rules (SSH Priority)
 # =========================
@@ -537,6 +548,7 @@ cat <<'QOS_SCRIPT' | cat_as_root /usr/local/bin/setup-qos.sh 0755
 set -euo pipefail
 
 IFACE="${1:-__SELECTED_IFACE__}"
+
 modprobe ifb
 ip link show ifb0 >/dev/null 2>&1 || ip link add ifb0 type ifb
 ip link set ifb0 up
@@ -608,6 +620,13 @@ CPU_GOVERNOR="performance"
 USB_AUTOSUSPEND=0
 DIRTY_WRITEBACK_LOW=3000
 DIRTY_WRITEBACK_HIGH=500
+Nice=19
+CPUSchedulingPolicy=other
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUQuota=25%
+MemoryMax=512M
+OOMScoreAdjust=500
 
 
 # Get current time and determine if it's "night time" (full throttle)
@@ -626,6 +645,19 @@ get_metrics() {
     local mem
     mem=$(free | awk '/Mem:/ {printf "%.0f", $3/$2 * 100}' || true)
     [[ -n "$mem" ]] || mem=0
+
+    local temp
+    temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk '{print $1/1000}' || true)
+    [[ -n "$temp" ]] || temp=0
+
+    local gw
+    gw=$(ip route | awk '/default/ {print $3; exit}' || true)
+
+    local latency=999
+    if [[ -n "$gw" ]]; then
+        latency=$(ping -c 3 "$gw" 2>/dev/null | tail -1 | awk -F'/' '{print $5}' | cut -d. -f1 || true)
+    fi
+    [[ -n "$latency" ]] || latency=999
     
     local rx_errors
     local tx_errors
@@ -939,7 +971,6 @@ systemctl start crash-protection.service
 # 9. Final Setup
 # =========================
 echo "==> 9) Finalizing setup"
-systemctl daemon-reload
 systemctl enable --now foobar_proxy_linux.service
 systemctl restart foobar_proxy_linux
 
@@ -965,9 +996,6 @@ if [[ ! -f "/etc/systemd/system/foobar_proxy_linux.service" ]]; then
     echo "ERROR: FOOBAR service file not found"
     exit 1
 fi
-
-# Reload systemd to ensure the service is recognized
-systemctl daemon-reload
 
 # Check service file
 if [[ ! -f "/etc/systemd/system/foobar_proxy_linux.service" ]]; then
