@@ -513,7 +513,7 @@ cat <<EOF | cat_as_root /etc/systemd/system/net-watchdog.service 0644
 Description=Network Watchdog
 After=network-online.target
 
-
+[Service]
 Type=simple
 ExecStart=/usr/local/bin/net-watchdog.sh
 Restart=on-failure
@@ -671,10 +671,10 @@ update_limits() {
   
     mkdir -p "$(dirname "$SERVICE_UNIT")"
     {
-      echo ""
+      echo "[Service]"
       echo "CPUQuota=$cpu_quota"
       echo "MemoryMax=$mem_max"
-      echo "Nice=$APP_NICE"
+      echo "Nice=19"
     } > "$SERVICE_UNIT"
     chown root:root "$SERVICE_UNIT"
     chmod 0644 "$SERVICE_UNIT"
@@ -831,7 +831,7 @@ cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.service 0644
 Description=Resource Monitor for FOOBAR
 After=network-online.target
 
-
+[Service]
 Type=simple
 User=root
 ExecStart=/usr/local/bin/resource-monitor.sh
@@ -918,7 +918,7 @@ cat <<EOF | cat_as_root /etc/systemd/system/crash-protection.service 0644
 Description=Crash Protection for FOOBAR
 After=network-online.target
 
-
+[Service]
 Type=simple
 ExecStart=/usr/local/bin/crash-protection.sh
 Restart=on-failure
