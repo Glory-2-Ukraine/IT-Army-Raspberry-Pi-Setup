@@ -859,6 +859,7 @@ WantedBy=timers.target
 EOF
 
 # Enable and start monitor
+systemctl daemon-reload
 systemctl enable --now resource-monitor.timer
 systemctl start resource-monitor.service
 
@@ -943,6 +944,7 @@ WantedBy=timers.target
 EOF
 
 # Enable crash protection
+systemctl daemon-reload
 systemctl enable --now crash-protection.timer
 systemctl start crash-protection.service
 
