@@ -11,7 +11,7 @@ exec > >(tee -a /var/log/foobar/setup.log) 2>&1
 set -x
 echo "$(date -Is) Script started"
 
-# Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi4B-02222026-1239 -o /usr/local/bin/foobar-setup.sh && chmod +x /usr/local/bin/foobar-setup.sh && /usr/local/bin/foobar-setup.sh"
+# Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi-04042026 -o  && chmod +x /usr/local/bin/setup.sh && /usr/local/bin/setup.sh"
 
 # =========================
 # FOOBAR Raspberry Pi 4B Optimized Setup
@@ -30,7 +30,7 @@ APP_NAME="foobar_proxy_linux"
 APP_CPU_QUOTA_DAY="40%"      # Daytime CPU limit
 APP_CPU_QUOTA_NIGHT="80%"    # Nighttime CPU limit (midnight-6am)
 APP_MEM_MAX="768M"           # Memory limit
-APP_NICE="19"                # Nice value
+APP_NICE=19                  # Nice value
 APP_DEADMAN_EVERY="6h"       # Deadman timer
 APP_HEARTBEAT_EVERY="5m"     # Heartbeat timer
 
@@ -413,7 +413,6 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-[Service]
 Type=simple
 User=root
 WorkingDirectory=/opt/itarmy/bin
@@ -430,21 +429,6 @@ CPUQuota=${APP_CPU_QUOTA_DAY}
 MemoryMax=${APP_MEM_MAX}
 TasksMax=512
 LimitNOFILE=1000000
-OOMScoreAdjust=500
-
-# Lowest practical scheduling priority
-Nice=${APP_NICE}
-CPUSchedulingPolicy=other
-IOSchedulingClass=best-effort
-IOSchedulingPriority=7
-
-# Hard resource limits
-CPUQuota=${APP_CPU_QUOTA_DAY}
-MemoryMax=${APP_MEM_MAX}
-TasksMax=512
-LimitNOFILE=1000000
-
-# Make the service yield first under pressure
 OOMScoreAdjust=500
 
 [Install]
@@ -529,7 +513,7 @@ cat <<EOF | cat_as_root /etc/systemd/system/net-watchdog.service 0644
 Description=Network Watchdog
 After=network-online.target
 
-[Service]
+
 Type=simple
 ExecStart=/usr/local/bin/net-watchdog.sh
 Restart=on-failure
@@ -687,7 +671,7 @@ update_limits() {
   
     mkdir -p "$(dirname "$SERVICE_UNIT")"
     {
-      echo "[Service]"
+      echo ""
       echo "CPUQuota=$cpu_quota"
       echo "MemoryMax=$mem_max"
       echo "Nice=$APP_NICE"
@@ -847,7 +831,7 @@ cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.service 0644
 Description=Resource Monitor for FOOBAR
 After=network-online.target
 
-[Service]
+
 Type=simple
 User=root
 ExecStart=/usr/local/bin/resource-monitor.sh
@@ -934,7 +918,7 @@ cat <<EOF | cat_as_root /etc/systemd/system/crash-protection.service 0644
 Description=Crash Protection for FOOBAR
 After=network-online.target
 
-[Service]
+
 Type=simple
 ExecStart=/usr/local/bin/crash-protection.sh
 Restart=on-failure
