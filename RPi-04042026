@@ -2,7 +2,7 @@
 set -euo pipefail
 #
 #
-#  THIS IS RUNNING 4B-51
+#  THIS IS RUNNING XXXXXXXXXX
 #
 #
 
@@ -66,7 +66,7 @@ ITARMY_BIN="/opt/itarmy/bin/foobar_proxy_linux"
 ITARMY_LANG="${ITARMY_LANG:-en}"
 ITARMY_USER_ID="${ITARMY_USER_ID:-NTI3MjIzNzgxNQ==}"
 ITARMY_COPIES="${ITARMY_COPIES:-1}"
-ITARMY_THREADS="${ITARMY_THREADS:-2048}"
+ITARMY_THREADS="${ITARMY_THREADS:-128}"
 
 # ---- Power Optimization Tunables ----
 # CPU Optimization
