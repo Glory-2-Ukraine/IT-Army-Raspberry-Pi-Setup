@@ -11,7 +11,7 @@ exec > >(tee -a /var/log/foobar/setup.log) 2>&1
 set -x
 echo "$(date -Is) Script started"
 
-# Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi-04042026 -o  && chmod +x /usr/local/bin/setup.sh && /usr/local/bin/setup.sh"
+# Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi-04042026 -o /usr/local/bin/setup.sh && chmod +x /usr/local/bin/setup.sh && /usr/local/bin/setup.sh"
 
 # =========================
 # FOOBAR Raspberry Pi 4B Optimized Setup
