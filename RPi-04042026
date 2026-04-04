@@ -84,7 +84,7 @@ DISABLE_HDMI=1                      # 1=disable HDMI
 DISABLE_LEDS=1                      # 1=disable activity LEDs
 
 # USB Power Management
-USB_AUTOSUSPEND=1                   # 1=enable USB auto-suspend
+USB_AUTOSUSPEND=0                   # 1=enable USB auto-suspend
 
 # Storage Optimization
 ENABLE_NOATIME=1                    # 1=mount with noatime
@@ -274,7 +274,7 @@ if [[ "$WIFI_POWER_SAVE" -eq 0 ]]; then
     [[ -n "$ACTIVE_CON" ]] && nmcli connection modify "$ACTIVE_CON" 802-11-wireless.powersave 2 2>/dev/null || true
 fi
 
-iwconfig "$IFACE" txpower $WIFI_TX_POWER 2>/dev/null
+iwconfig "$IFACE" txpower "$WIFI_TX_POWER" 2>/dev/null || true
 
 # 3. Disable Unused Peripherals
 if [[ "$DISABLE_BLUETOOTH" -eq 1 ]]; then
@@ -512,7 +512,7 @@ systemctl enable --now net-watchdog.service
 # =========================
 # 7. Install QoS Rules (SSH Priority)
 # =========================
-echo "==> 6) Setting up QoS rules for SSH priority"
+echo "==> 7) Setting up QoS rules for SSH priority"
 cat <<'QOS_SCRIPT' | cat_as_root /usr/local/bin/setup-qos.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
@@ -564,7 +564,7 @@ fi
 # =========================
 # 8. Install Resource Monitor with Time Awareness
 # =========================
-echo "==> 7) Installing comprehensive resource monitor"
+echo "==> 8) Installing comprehensive resource monitor"
 cat <<'MONITOR_SCRIPT' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
@@ -628,9 +628,6 @@ get_metrics() {
     echo "$load $cpu $mem $temp $latency $tx_errors $rx_errors $retries $foobar_cpu $foobar_mem $foobar_threads"
     echo "$(date -Is) Load=$load, CPU=$cpu%, MEM=$mem%, Temp=${temp}C, Latency=${latency}ms, TX-Err=$tx_errors, RX-Err=$rx_errors, Retries=$retries, FOOBAR-CPU=$foobar_cpu%, FOOBAR-MEM=$foobar_mem%, FOOBAR-Threads=$foobar_threads" >> "$LOG_FILE"
 }
-
-
-
 
 # Update systemd limits
 update_limits() {
@@ -831,7 +828,7 @@ systemctl enable --now resource-monitor.timer
 systemctl start resource-monitor.service
 
 # =========================
-# 9. Install Crash Protection
+# 8. Install Crash Protection
 # =========================
 echo "==> 8) Setting up crash protection"
 cat <<'CRASH_SCRIPT' | cat_as_root /usr/local/bin/crash-protection.sh 0755
@@ -915,7 +912,7 @@ systemctl enable --now crash-protection.timer
 systemctl start crash-protection.service
 
 # =========================
-# 10. Final Setup
+# 9. Final Setup
 # =========================
 echo "==> 9) Finalizing setup"
 systemctl daemon-reload
@@ -929,9 +926,9 @@ echo "System status: htop"
 echo "Temperature: cat /sys/class/thermal/thermal_zone0/temp"
 
 # =========================
-# Final Verification
+# 10. Final Verification
 # =========================
-echo "==> Running final verification checks"
+echo "==> 10) Running final verification checks"
 
 # Check binary
 if [[ ! -f "${ITARMY_BIN}" ]]; then
