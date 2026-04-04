@@ -24,13 +24,7 @@ echo "$(date -Is) Script started"
 # =========================
 
 # ---- Tunables ----
-INSTALL_HARDENED_APP=1
 APP_NAME="foobar_proxy_linux"
-APP_USER="pi"
-START_SCRIPT="${APP_NAME}-worker.sh"
-APP_EXECSTART="/usr/local/bin/${START_SCRIPT}"
-APP_ENV_FILE="/etc/default/${APP_NAME}"
-APP_WORKDIR="/opt/itarmy/bin"
 
 # Resource limits
 APP_CPU_QUOTA_DAY="40%"      # Daytime CPU limit
@@ -84,7 +78,7 @@ DISABLE_HDMI=1                      # 1=disable HDMI
 DISABLE_LEDS=1                      # 1=disable activity LEDs
 
 # USB Power Management
-USB_AUTOSUSPEND=0                   # 1=enable USB auto-suspend
+USB_AUTOSUSPEND=0                   # Disabled on this build to avoid destabilizing USB Wi-Fi
 
 # Storage Optimization
 ENABLE_NOATIME=1                    # 1=mount with noatime
@@ -194,13 +188,15 @@ if echo "$AVAILABLE_WLAN" | grep -q "wlan1"; then
     IFACE="wlan1"
     echo "Selected wlan1 for better performance and isolation"
 
-    # Force wlan0 out of service to prevent flapping
     nmcli device disconnect wlan0 2>/dev/null || true
     nmcli device set wlan0 managed no 2>/dev/null || true
     ip link set wlan0 down 2>/dev/null || true
 else
     IFACE="wlan0"
     echo "Using wlan0 (wlan1 not available)"
+
+    nmcli device set wlan0 managed yes 2>/dev/null || true
+    ip link set wlan0 up 2>/dev/null || true
 fi
 
 # Export chosen interface for child processes launched from this script
@@ -408,7 +404,7 @@ echo "FOOBAR binary installed successfully at ${ITARMY_BIN}"
 echo "==> 5) Installing FOOBAR systemd service"
 
 # Create service file
-cat > /etc/systemd/system/foobar_proxy_linux.service <<'EOF'
+cat > /etc/systemd/system/foobar_proxy_linux.service <<EOF
 [Unit]
 Description=FOOBAR Proxy Service
 After=network-online.target
@@ -423,8 +419,21 @@ Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
+
+# Lowest practical scheduling priority
+Nice=${APP_NICE}
+CPUSchedulingPolicy=other
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+# Hard resource limits
+CPUQuota=${APP_CPU_QUOTA_DAY}
+MemoryMax=${APP_MEM_MAX}
+TasksMax=512
 LimitNOFILE=1000000
-TasksMax=infinity
+
+# Make the service yield first under pressure
+OOMScoreAdjust=500
 
 [Install]
 WantedBy=multi-user.target
@@ -438,8 +447,9 @@ systemctl enable foobar_proxy_linux.service
 # =========================
 # 6. Install Network Watchdog
 # =========================
+
 echo "==> 6) Installing network watchdog"
-cat > /usr/local/bin/net-watchdog.sh <<'WATCHDOG_SCRIPT'
+cat <<'WATCHDOG_SCRIPT' | cat_as_root /usr/local/bin/net-watchdog.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -448,19 +458,31 @@ MAX_NET_LATENCY="${MAX_NET_LATENCY:-200}"
 
 check_network_quality() {
     local gw
-    gw=$(ip route | awk '/default/ {print $3}' | head -n 1) || { echo "No default gateway found"; return 1; }
+    gw=$(ip route | awk '/default/ {print $3; exit}' || true)
+
+    local default_dev
+    default_dev=$(ip route | awk '/default/ {for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}' || true)
+
+    if ! ip link show "$IFACE" &> /dev/null; then
+        echo "Error: Network interface $IFACE not found"
+        ip -o link show | awk -F': ' '{print $2}'
+        return 1
+    fi
+
+    if [[ -z "$gw" ]]; then
+        echo "No default gateway found"
+        return 1
+    fi
+
+    if [[ "$default_dev" != "$IFACE" ]]; then
+        logger -t net-watchdog "Default route is on ${default_dev:-unknown}, expected $IFACE"
+        return 1
+    fi
 
     local latency_output
     latency_output=$(ping -c 3 -q "$gw" 2>/dev/null || echo "")
     local latency
     latency=$(echo "$latency_output" | awk -F'/' '/rtt/ {print $5}' | awk '{print $1}' || echo 0)
-
-    if ! ip link show "$IFACE" &> /dev/null; then
-        echo "Error: Network interface $IFACE not found"
-        echo "Available interfaces:"
-        ip -o link show | awk -F': ' '{print $2}'
-        return 1
-    fi
 
     if (( $(echo "${latency:-0} > $MAX_NET_LATENCY" | bc -l) )); then
         logger -t net-watchdog "High latency detected: ${latency}ms > ${MAX_NET_LATENCY}ms"
@@ -490,10 +512,9 @@ WATCHDOG_SCRIPT
 
 sed -i "s/__SELECTED_IFACE__/$IFACE/g" /usr/local/bin/net-watchdog.sh
 
-chmod 0755 /usr/local/bin/net-watchdog.sh
+systemctl enable --now net-watchdog.service
 
-# Systemd unit for watchdog
-cat <<EOF | cat_as_root /etc/systemd/system/net-watchdog.service 0644
+cat <<EOF | cat_as_root /usr/local/bin/net-watchdog.sh 0644
 [Unit]
 Description=Network Watchdog
 After=network-online.target
@@ -507,8 +528,6 @@ Restart=on-failure
 WantedBy=multi-user.target
 EOF
 
-systemctl enable --now net-watchdog.service
-
 # =========================
 # 7. Install QoS Rules (SSH Priority)
 # =========================
@@ -517,7 +536,7 @@ cat <<'QOS_SCRIPT' | cat_as_root /usr/local/bin/setup-qos.sh 0755
 #!/usr/bin/env bash
 set -euo pipefail
 
-IFACE="${1:-wlan0}"
+IFACE="${1:-__SELECTED_IFACE__}"
 modprobe ifb
 ip link show ifb0 >/dev/null 2>&1 || ip link add ifb0 type ifb
 ip link set ifb0 up
@@ -551,6 +570,8 @@ tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip sport 2222 
 # Match FOOBAR traffic (low priority, marked with fwmark 1)
 tc filter add dev "$IFACE" protocol ip parent 1: prio 2 handle 1 fw flowid 1:20
 QOS_SCRIPT
+
+sed -i "s/__SELECTED_IFACE__/$IFACE/g" /usr/local/bin/setup-qos.sh
 
 # Apply QoS rules
 sleep 2
@@ -598,21 +619,24 @@ is_night_time() {
 # Get system metrics
 get_metrics() {
     local load=$(uptime | awk -F'load average: ' '{print $2}' | awk '{print $3}' | cut -d, -f1)
-    local cpu=$(top -bn1 | grep "Cpu(s)" | sed "s/.*, *\([0-9.]*\)%* id.*/\1/" | awk '{print 100 - $1}')
-    local mem=$(free | awk '/Mem:/ {printf "%.0f", $3/$2 * 100}')
-    local temp=$(cat /sys/class/thermal/thermal_zone0/temp | awk '{print $1/1000}')
-    local gw
-    gw=$(ip route | awk '/default/ {print $3; exit}' || true)
-    local latency=999
-    if [[ -n "$gw" ]]; then
-        latency=$(ping -c 3 "$gw" 2>/dev/null | tail -1 | awk -F'/' '{print $5}' | cut -d. -f1 || echo 999)
-    fi
-
+    local cpu
+    cpu=$(top -bn1 | awk -F'id,' '/Cpu\\(s\\)/ {gsub(/^[ \t]+|[ \t]+$/, "", $1); split($1,a,","); gsub(/.* /,"",a[length(a)]); print 100 - a[length(a)]}' || true)
+    [[ -n "$cpu" ]] || cpu=0
+    
+    local mem
+    mem=$(free | awk '/Mem:/ {printf "%.0f", $3/$2 * 100}' || true)
+    [[ -n "$mem" ]] || mem=0
+    
     local rx_errors
     local tx_errors
-    rx_errors=$(ip -s link show "$IFACE" | awk '/RX:/ {getline; print $3; exit}')
-    tx_errors=$(ip -s link show "$IFACE" | awk '/TX:/ {getline; print $3; exit}')
-    local retries=$(iwconfig "$IFACE" 2>/dev/null | grep -c "Retry" || echo 0)
+    rx_errors=$(ip -s link show "$IFACE" | awk '/RX:/ {getline; print $3; exit}' || true)
+    tx_errors=$(ip -s link show "$IFACE" | awk '/TX:/ {getline; print $3; exit}' || true)
+    [[ -n "$rx_errors" ]] || rx_errors=0
+    [[ -n "$tx_errors" ]] || tx_errors=0
+    
+    local retries
+    retries=$(iwconfig "$IFACE" 2>/dev/null | grep -c "Retry" || true)
+    [[ -n "$retries" ]] || retries=0
 
     # Get FOOBAR-specific metrics
     local foobar_pid=$(pgrep -f "/opt/itarmy/bin/foobar_proxy_linux" | head -1)
