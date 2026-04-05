@@ -105,10 +105,6 @@ THERMAL_LIMIT=65                    # Thermal trip point (°C)
 
 # ---- End Tunables ----
 
-mkdir -p /var/log/foobar
-chown -R root:root /var/log/foobar
-chmod -R 755 /var/log/foobar
-
 # Validate thread/copy limits
 if [[ ${ITARMY_THREADS} -gt 4096 ]]; then
     echo "Warning: ITARMY_THREADS (${ITARMY_THREADS}) exceeds maximum 4096, capping to 4096"
@@ -119,7 +115,6 @@ if [[ ${ITARMY_COPIES} -gt 4 ]]; then
     ITARMY_COPIES=4
 fi
 
-need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; exit 1; }; }
 backup_if_exists() { local f="$1"; [[ -e "$f" ]] && cp -a "$f" "${f}.BACKUP.$(date +%Y%m%d-%H%M%S)"; }
 cat_as_root() {
   local path="$1" mode="${2:-0644}"
@@ -1036,14 +1031,15 @@ fi
 # Reload systemd to ensure the service is recognized
 systemctl daemon-reload
 
-# Check service
-if ! systemctl list-unit-files --no-pager | grep -q '^foobar_proxy_linux\.service'; then
-    echo "ERROR: FOOBAR service unit file not recognized by systemd"
+# Check service unit more directly
+if [[ ! -f /etc/systemd/system/foobar_proxy_linux.service ]]; then
+    echo "ERROR: MHDDOS service file not found on disk"
+    exit 1
+fi
+
+if ! systemctl status foobar_proxy_linux.service >/dev/null 2>&1; then
     systemctl daemon-reload
     sleep 2
-    if ! systemctl list-unit-files --no-pager | grep -q '^foobar_proxy_linux\.service'; then
-        exit 1
-    fi
 fi
 
 # Check if service is enabled
