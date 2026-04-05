@@ -1,0 +1,1107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+#
+#  THIS IS RUNNING XXXXXXXXXX
+#
+#
+
+# For debugging
+need_root() { [[ "${EUID:-$(id -u)}" -eq 0 ]] || { echo "Run as root: sudo $0"; exit 1; }; }
+
+need_root
+
+mkdir -p /var/log/foobar
+touch /var/log/foobar/setup.log
+chown -R root:root /var/log/foobar
+chmod -R 755 /var/log/foobar
+
+# For debugging
+exec > >(tee -a /var/log/foobar/setup.log) 2>&1
+set -x
+echo "$(date -Is) Script started"
+
+# Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi-04042026 -o /usr/local/bin/setup.sh && chmod +x /usr/local/bin/setup.sh && /usr/local/bin/setup.sh"
+
+# =========================
+# FOOBAR Raspberry Pi 4B Optimized Setup
+# Features:
+# - Dynamic resource monitoring (CPU, Mem, Temp, Network)
+# - Time-based throttling (full throttle midnight-6am)
+# - Absolute priority for SSH and Pi Connect
+# - Network watchdog and QoS
+# - Crash protection and auto-restart
+# =========================
+
+# ---- Tunables ----
+APP_NAME="foobar_proxy_linux"
+
+# Resource limits
+APP_CPU_QUOTA_DAY="65%"       # Daytime CPU limit
+APP_CPU_QUOTA_NIGHT="90%"     # Nighttime CPU limit
+APP_MEM_MAX="1024M"           # Hard max
+APP_MEM_MAX_DAY="768M"        # Daytime working limit
+APP_MEM_MAX_NIGHT="1024M"     # Nighttime working limit
+APP_NICE=19
+APP_DEADMAN_EVERY="6h"
+APP_HEARTBEAT_EVERY="5m"
+
+# Thread scaling tunables
+MIN_THREADS=256
+MAX_THREADS_DAY=2048
+MAX_THREADS_NIGHT=4096
+THREAD_STEP_UP=256
+THREAD_STEP_DOWN=256
+
+# Thresholds
+MAX_LOAD=2.8
+MAX_TEMP=70
+MAX_CPU_DAY=75
+MAX_CPU_NIGHT=95
+MAX_MEM=90
+MAX_NET_LATENCY=200
+
+# Time window for full throttle (midnight-6am)
+FULL_THROTTLE_START="00:00"
+FULL_THROTTLE_END="06:00"
+
+# ---- ITARMY installer + runtime ----
+ITARMY_INSTALL_URL="${ITARMY_INSTALL_URL:-https://github.com/porthole-ascend-cinnamon/foobar_proxy_releases/releases/latest/download/foobar_proxy_linux_arm64}"
+ITARMY_INSTALLER_PATH="${ITARMY_INSTALLER_PATH:-/opt/itarmy/bin/}"
+ITARMY_BIN="/opt/itarmy/bin/foobar_proxy_linux"
+ITARMY_LANG="${ITARMY_LANG:-en}"
+ITARMY_USER_ID="${ITARMY_USER_ID:-NTI3MjIzNzgxNQ==}"
+ITARMY_COPIES="${ITARMY_COPIES:-1}"
+ITARMY_THREADS="${ITARMY_THREADS:-512}"
+
+# ---- Power Optimization Tunables ----
+# CPU Optimization
+CPU_GOVERNOR="performance"          # Governor: performance, ondemand, powersave
+CPU_MAX_FREQ_DAY=1200000            # Daytime max frequency (1.2GHz)
+CPU_MAX_FREQ_NIGHT=1400000          # Nighttime max frequency (1.4GHz)
+
+# WiFi Optimization
+WIFI_POWER_SAVE=0                   # 0=disabled (max performance), 1=enabled
+WIFI_TX_POWER=30                    # TX power level (15-30)
+
+# Peripheral Management
+DISABLE_BLUETOOTH=1                 # 1=disable Bluetooth
+DISABLE_HDMI=1                      # 1=disable HDMI
+DISABLE_LEDS=1                      # 1=disable activity LEDs
+
+# USB Power Management
+USB_AUTOSUSPEND=0                   # Disabled on this build to avoid destabilizing USB Wi-Fi
+
+# Storage Optimization
+ENABLE_NOATIME=1                    # 1=mount with noatime
+DIRTY_WRITEBACK_LOW=3000            # Low load writeback delay (ms)
+DIRTY_WRITEBACK_HIGH=500            # High load writeback delay (ms)
+
+# Memory Optimization
+ENABLE_ZSWAP=1                      # 1=enable zswap
+SWAPPINESS=10                       # Swappiness value (10-60)
+
+# Thermal Management
+THERMAL_LIMIT=65                    # Thermal trip point (°C)
+
+
+# ---- End Tunables ----
+
+# Validate thread/copy limits
+if [[ ${ITARMY_THREADS} -gt 4096 ]]; then
+    echo "Warning: ITARMY_THREADS (${ITARMY_THREADS}) exceeds maximum 4096, capping to 4096"
+    ITARMY_THREADS=4096
+fi
+if [[ ${ITARMY_COPIES} -gt 4 ]]; then
+    echo "Warning: ITARMY_COPIES (${ITARMY_COPIES}) exceeds maximum 4, capping to 4"
+    ITARMY_COPIES=4
+fi
+
+backup_if_exists() { local f="$1"; [[ -e "$f" ]] && cp -a "$f" "${f}.BACKUP.$(date +%Y%m%d-%H%M%S)"; }
+cat_as_root() {
+  local path="$1" mode="${2:-0644}"
+  if ! tee "$path" >/dev/null; then
+      echo "ERROR: Failed to write to $path"
+      exit 1
+  fi
+  chown root:root "$path"
+  chmod "$mode" "$path"
+}
+
+
+cat_as_root_append() {
+  local path="$1" mode="${2:-0644}"
+  tee -a "$path" >/dev/null
+  chown root:root "$path"
+  chmod "$mode" "$path"
+}
+
+need_root
+
+# =========================
+# 1. Base Setup
+# =========================
+echo "==> 1) Installing base packages and dependencies"
+apt-get update -y
+apt-get install -y \
+  ca-certificates curl wget file \
+  iproute2 iputils-ping network-manager \
+  iw wireless-tools rfkill \
+  htop lm-sensors iotop iftop jq bc stress-ng
+
+# =========================
+# POWER OPTIMIZATION SYSTEM DOCUMENTATION
+# =========================
+# This system provides comprehensive power management while preserving
+# network performance for FOOBAR. All features are configurable via
+# variables at the top of this script.
+#
+# Key Features:
+# - Dynamic CPU frequency scaling (day/night modes)
+# - WiFi power management (disabled by default for max performance)
+# - Peripheral power saving (Bluetooth, HDMI, LEDs)
+# - USB power management (auto-suspend for non-critical devices)
+# - Storage optimizations (noatime, dirty page tuning)
+# - Memory optimizations (zswap, swappiness)
+# - Thermal management
+# - Kernel network tuning
+#
+# Configuration:
+# All settings are configurable via variables at the top of the script.
+# Default settings are optimized for FOOBAR performance with balanced
+# power consumption.
+#
+# Logging:
+# All power optimizations are logged to /var/log/foobar/setup.log
+# Runtime adjustments are logged to /var/log/foobar/resource-monitor.log
+#
+# Verification:
+# After setup, verify your configuration with:
+# cat /var/log/foobar/setup.log
+# =========================
+
+
+# =========================
+# 2. Network Interface Selection and Optimization for FOOBAR
+# =========================
+echo "==> 2) Configuring optimal network interface for FOOBAR"
+
+# 1. Check available wireless interfaces
+AVAILABLE_WLAN=$(ip -o link show | awk -F': ' '$2 ~ /^wlan/ {print $2}' | sort)
+echo "Available wireless interfaces: $AVAILABLE_WLAN"
+
+CURRENT_DEFAULT_IFACE=$(ip route | awk '/^default/ {for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}' || true)
+echo "Current default route interface: ${CURRENT_DEFAULT_IFACE:-none}"
+
+# 2. Safely prefer wlan1 only if it is actually usable
+if echo "$AVAILABLE_WLAN" | grep -q "wlan1"; then
+    echo "wlan1 detected; testing before switching"
+
+    nmcli device set wlan1 managed yes 2>/dev/null || true
+    ip link set wlan1 up 2>/dev/null || true
+
+    # Give the interface a moment to settle
+    sleep 3
+
+    WLAN1_HAS_IP=0
+    WLAN1_HAS_DEFAULT=0
+
+    ip -4 addr show wlan1 | grep -q 'inet ' && WLAN1_HAS_IP=1
+    ip route | awk '/^default/ {for(i=1;i<=NF;i++) if($i=="dev" && $(i+1)=="wlan1") found=1} END{exit !found}' && WLAN1_HAS_DEFAULT=1 || true
+
+    if [[ "$WLAN1_HAS_IP" -eq 1 && "$WLAN1_HAS_DEFAULT" -eq 1 ]]; then
+        IFACE="wlan1"
+        echo "wlan1 is active and has the default route; switching away from wlan0"
+
+        nmcli device disconnect wlan0 2>/dev/null || true
+        nmcli device set wlan0 managed no 2>/dev/null || true
+        ip link set wlan0 down 2>/dev/null || true
+    else
+        IFACE="wlan0"
+        echo "wlan1 exists but is not yet carrying traffic; keeping wlan0 active"
+
+        nmcli device set wlan0 managed yes 2>/dev/null || true
+        ip link set wlan0 up 2>/dev/null || true
+    fi
+else
+    IFACE="wlan0"
+    echo "Using wlan0 (wlan1 not available)"
+
+    nmcli device set wlan0 managed yes 2>/dev/null || true
+    ip link set wlan0 up 2>/dev/null || true
+fi
+
+# Export chosen interface for child processes launched from this script
+export IFACE
+
+# Recovery: if wlan1 was selected but connectivity is not actually up, fall back to wlan0
+if [[ "$IFACE" == "wlan1" ]]; then
+    if ! ip route | awk '/^default/ {for(i=1;i<=NF;i++) if($i=="dev" && $(i+1)=="wlan1") found=1} END{exit !found}'; then
+        echo "wlan1 selected but not carrying default route; restoring wlan0"
+
+        nmcli device set wlan0 managed yes 2>/dev/null || true
+        ip link set wlan0 up 2>/dev/null || true
+        IFACE="wlan0"
+        export IFACE
+    fi
+fi
+
+# 3. Optimize the selected interface for FOOBAR
+echo "Optimizing $IFACE for high-throughput operation"
+# Disable power saving completely
+iw dev "$IFACE" set power_save off 2>/dev/null || true
+ACTIVE_CON=$(nmcli -t -f NAME,DEVICE connection show --active | awk -F: -v d="$IFACE" '$2==d{print $1; exit}')
+[[ -n "$ACTIVE_CON" ]] && nmcli connection modify "$ACTIVE_CON" 802-11-wireless.powersave 2 2>/dev/null || true
+
+# Increase TX power (if supported)
+iw reg set US 2>/dev/null || true  # Set to US regulatory domain for max power
+iwconfig "$IFACE" txpower 30 2>/dev/null || true  # Set max transmit power
+
+# Enable TCP optimizations for high throughput
+SYSCTL_DROPIN="/etc/sysctl.d/99-custom-net-tuning.conf"
+cat <<'EOF' | cat_as_root "$SYSCTL_DROPIN" 0644
+# Network tuning (generic)
+net.core.rmem_max=16777216
+net.core.wmem_max=16777216
+net.ipv4.tcp_rmem=4096 87380 16777216
+net.ipv4.tcp_wmem=4096 65536 16777216
+net.ipv4.tcp_congestion_control=bbr
+net.ipv4.tcp_tw_reuse=1
+net.ipv4.tcp_fin_timeout=30
+EOF
+sysctl --system >/dev/null 2>&1
+
+
+# 4. Disable all other wireless interfaces
+if [[ "$IFACE" == "wlan1" ]]; then
+    # wlan1 is confirmed active, so suppress wlan0
+    while IFS= read -r iface; do
+        [[ -n "$iface" ]] || continue
+        echo "Disabling $iface to prevent interference"
+        nmcli device disconnect "$iface" 2>/dev/null || true
+        nmcli device set "$iface" managed no 2>/dev/null || true
+        ip link set "$iface" down 2>/dev/null || true
+    done < <(printf '%s\n' "$AVAILABLE_WLAN" | grep -vx "$IFACE" || true)
+else
+    # Keep wlan1 available as a standby path if wlan0 is still active
+    if echo "$AVAILABLE_WLAN" | grep -q "wlan1"; then
+        echo "Keeping wlan1 available as standby; not disabling it"
+        nmcli device set wlan1 managed yes 2>/dev/null || true
+        ip link set wlan1 up 2>/dev/null || true
+    fi
+fi
+
+# 5. Verify configuration
+echo "Active wireless interface:"
+ip -o link show "$IFACE"
+echo "Power save setting:"
+nmcli -f WIRELESS-PROPERTIES.WIFI.POWERSAVE dev show "$IFACE" 2>/dev/null | grep -i powersave || true
+echo "TX Power:"
+iwconfig "$IFACE" 2>/dev/null | grep "Tx-Power" || true
+echo "TCP congestion control:"
+sysctl net.ipv4.tcp_congestion_control 2>/dev/null
+
+# =========================
+# Power Optimization for FOOBAR (Network-Preserving)
+# =========================
+echo "==> Applying power optimizations (network performance preserved)"
+
+# 1. CPU Optimization
+echo "Configuring CPU governor to $CPU_GOVERNOR"
+for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    [[ -w "$f" ]] && echo "$CPU_GOVERNOR" > "$f"
+done
+
+for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq; do
+    [[ -w "$f" ]] && echo "$CPU_MAX_FREQ_DAY" > "$f"
+done
+
+# 2. WiFi Optimization
+if [[ "$WIFI_POWER_SAVE" -eq 0 ]]; then
+    echo "Disabling WiFi power save for maximum throughput"
+    iw dev "$IFACE" set power_save off 2>/dev/null || true
+    ACTIVE_CON=$(nmcli -t -f NAME,DEVICE connection show --active | awk -F: -v d="$IFACE" '$2==d{print $1; exit}')
+    [[ -n "$ACTIVE_CON" ]] && nmcli connection modify "$ACTIVE_CON" 802-11-wireless.powersave 2 2>/dev/null || true
+fi
+
+iwconfig "$IFACE" txpower "$WIFI_TX_POWER" 2>/dev/null || true
+
+# 3. Disable Unused Peripherals
+if [[ "$DISABLE_BLUETOOTH" -eq 1 ]]; then
+    echo "Disabling Bluetooth"
+    rfkill block bluetooth 2>/dev/null || true
+    systemctl stop bluetooth 2>/dev/null || true
+    systemctl disable bluetooth 2>/dev/null || true
+fi
+
+if [[ "$DISABLE_HDMI" -eq 1 ]]; then
+    echo "Disabling HDMI"
+    /usr/bin/tvservice -o 2>/dev/null || true
+fi
+
+if [[ "$DISABLE_LEDS" -eq 1 ]]; then
+    echo "Disabling activity LEDs"
+    echo 0 | tee /sys/class/leds/led0/trigger 2>/dev/null || true
+fi
+
+# 4. USB Optimization
+if [[ "$USB_AUTOSUSPEND" -eq 1 ]]; then
+    echo "Enabling USB auto-suspend"
+    for usb in /sys/bus/usb/devices/*; do
+        [[ -w "$usb/power/control" ]] || continue
+        if [[ -e "$usb/net/$IFACE" ]]; then
+            echo "Skipping USB autosuspend for network adapter backing $IFACE"
+            continue
+        fi
+        echo auto > "$usb/power/control"
+    done
+fi
+
+# 5. Storage Optimization
+if [[ "$ENABLE_NOATIME" -eq 1 ]]; then
+    mount -o remount,noatime,nodiratime / 2>/dev/null
+fi
+
+# 6. Memory Optimization
+if [[ "$ENABLE_ZSWAP" -eq 1 ]]; then
+    echo "1" | tee /sys/module/zswap/parameters/enabled 2>/dev/null
+fi
+sysctl -w vm.swappiness=$SWAPPINESS >/dev/null 2>&1
+
+# 7. Thermal Management
+echo "$((THERMAL_LIMIT*1000))" | tee /sys/class/thermal/thermal_zone0/trip_point_0_temp 2>/dev/null || true
+
+# 8. Kernel Tuning for Network Performance
+echo "Optimizing kernel for network performance"
+sysctl -w net.core.somaxconn=4096          # Increase socket backlog
+sysctl -w net.ipv4.tcp_max_syn_backlog=8192
+sysctl -w net.ipv4.tcp_tw_reuse=1          # Enable TCP connection reuse
+sysctl -w net.ipv4.tcp_fin_timeout=15      # Reduce FIN timeout
+sysctl -w net.ipv4.tcp_keepalive_time=60   # Reduce keepalive frequency
+
+# Log all power optimizations
+{
+echo "$(date -Is) POWER OPTIMIZATIONS APPLIED:"
+echo "CPU Governor: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor)"
+echo "CPU Max Freq: $(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq)"
+echo "WiFi Power Save: $(iw dev $IFACE get power_save)"
+echo "WiFi TX Power: $(iwconfig "$IFACE" 2>/dev/null | grep -F 'Tx-Power' || true)"
+echo "Bluetooth Status: $(rfkill list bluetooth 2>/dev/null | grep -cF 'Soft blocked: yes' || true)"
+echo "Filesystem Mount Options: $(mount | grep -F 'on / ' || true)"
+echo "HDMI Status: $(vcgencmd display_power 2>/dev/null || echo unavailable)"
+echo "Thermal Limit: $(cat /sys/class/thermal/thermal_zone0/trip_point_0_temp 2>/dev/null || echo unavailable)"
+echo "USB Auto-Suspend: $(cat /sys/bus/usb/devices/*/power/autosuspend_delay_ms 2>/dev/null | head -1 || echo unavailable)"
+echo "Swappiness: $(sysctl vm.swappiness | awk '{print $3}')"
+} >> "/var/log/foobar/setup.log"
+
+
+# =========================
+# 3. Create foobar.ini with time-aware settings
+# =========================
+echo "==> 3) Creating time-aware foobar.ini"
+INI_PATH="/opt/itarmy/bin/foobar.ini"
+mkdir -p "$(dirname "$INI_PATH")"
+
+# Initial conservative settings (will be adjusted by monitor)
+cat <<EOF | cat_as_root "$INI_PATH" 0644
+# Змінити мову | Change language (ua | en | es | de | pl | lt)
+lang = ${ITARMY_LANG}
+
+# Запуск декількох копій (auto для максимального значення, потрібно 3+ ядер процесору та стабільний інтернет)
+# Run multiple copies (set "auto" for max value, requires 3+ core CPU and stable network)
+copies = ${ITARMY_COPIES}
+
+# Кількість потоків на 1 копію | Number of threads per copy
+# Для активації приберіть символ # | Remove the # symbol to enable 
+threads = ${ITARMY_THREADS}
+
+# Атака через мій IP у % від 0 до 100 (обов'язковий VPN чи віддалений сервер)
+# Use my IP for the attack in % from 0 to 100 (requires VPN or remote server)
+use-my-ip = 0
+
+user-id = $(printf '%s' "$ITARMY_USER_ID" | base64 -d)
+EOF
+
+# =========================
+# 4. Install FOOBAR Proxy Binary
+# =========================
+echo "==> 4) Downloading and installing FOOBAR proxy binary"
+mkdir -p "${ITARMY_INSTALLER_PATH}"
+
+# Download the binary directly
+echo "Downloading FOOBAR proxy binary from ${ITARMY_INSTALL_URL}"
+if ! curl -fsSL "${ITARMY_INSTALL_URL}" -o "${ITARMY_BIN}" ; then
+    echo "ERROR: Failed to download FOOBAR binary from ${ITARMY_INSTALL_URL}"
+    echo "Attempting alternative download method..."
+    if ! wget -q "${ITARMY_INSTALL_URL}" -O "${ITARMY_BIN}" ; then
+        echo "ERROR: All download attempts failed. Check your internet connection."
+        exit 1
+    fi
+fi
+
+# Set permissions
+chmod +x "${ITARMY_BIN}"
+chown root:root "${ITARMY_BIN}"
+
+# Verify the binary
+if ! file "${ITARMY_BIN}" | grep -q "ELF"; then
+    echo "ERROR: Downloaded file is not a valid binary"
+    rm -f "${ITARMY_BIN}"
+    exit 1
+fi
+
+echo "FOOBAR binary installed successfully at ${ITARMY_BIN}"
+
+# =========================
+# 5. Install FOOBAR Service
+# =========================
+echo "==> 5) Installing FOOBAR systemd service"
+
+# Create service file
+cat > /etc/systemd/system/foobar_proxy_linux.service <<EOF
+[Unit]
+Description=FOOBAR Proxy Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/itarmy/bin
+ExecStart=/opt/itarmy/bin/foobar_proxy_linux
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Nice=${APP_NICE}
+CPUSchedulingPolicy=other
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUQuota=${APP_CPU_QUOTA_DAY}
+MemoryMax=${APP_MEM_MAX}
+TasksMax=512
+LimitNOFILE=1000000
+OOMScoreAdjust=500
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+chmod 644 /etc/systemd/system/foobar_proxy_linux.service
+systemctl daemon-reload
+sleep 2
+systemctl enable foobar_proxy_linux.service
+
+# =========================
+# 6. Install Network Watchdog
+# =========================
+
+echo "==> 6) Installing network watchdog"
+cat <<'WATCHDOG_SCRIPT' | cat_as_root /usr/local/bin/net-watchdog.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+IFACE="__SELECTED_IFACE__"
+MAX_NET_LATENCY="${MAX_NET_LATENCY:-200}"
+
+check_network_quality() {
+    local gw
+    gw=$(ip route | awk '/default/ {print $3; exit}' || true)
+
+    local default_dev
+    default_dev=$(ip route | awk '/default/ {for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}' || true)
+
+    if ! ip link show "$IFACE" &> /dev/null; then
+        echo "Error: Network interface $IFACE not found"
+        ip -o link show | awk -F': ' '{print $2}'
+        return 1
+    fi
+
+    if [[ -z "$gw" ]]; then
+        echo "No default gateway found"
+        return 1
+    fi
+
+    if [[ "$default_dev" != "$IFACE" ]]; then
+        logger -t net-watchdog "Default route is on ${default_dev:-unknown}, expected $IFACE"
+        return 1
+    fi
+
+    local latency_output
+    latency_output=$(ping -c 3 -q "$gw" 2>/dev/null || echo "")
+    local latency
+    latency=$(echo "$latency_output" | awk -F'/' '/rtt/ {print $5}' | awk '{print $1}' || echo 0)
+
+    if (( $(echo "${latency:-0} > $MAX_NET_LATENCY" | bc -l) )); then
+        logger -t net-watchdog "High latency detected: ${latency}ms > ${MAX_NET_LATENCY}ms"
+        return 1
+    fi
+
+    if ! ping -c 3 -q 8.8.8.8 &> /dev/null; then
+        echo "Error: No network connectivity detected"
+        return 1
+    fi
+
+    return 0
+}
+
+main() {
+    if ! check_network_quality; then
+        if systemctl is-active --quiet NetworkManager; then
+            systemctl restart NetworkManager
+        else
+            echo "NetworkManager is not running"
+        fi
+        sleep 5
+    fi
+}
+main
+WATCHDOG_SCRIPT
+
+sed -i "s/__SELECTED_IFACE__/$IFACE/g" /usr/local/bin/net-watchdog.sh
+
+cat <<EOF | cat_as_root /etc/systemd/system/net-watchdog.service 0644
+[Unit]
+Description=Network Watchdog
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/net-watchdog.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now net-watchdog.service
+
+# =========================
+# 7. Install QoS Rules (SSH Priority)
+# =========================
+echo "==> 7) Setting up QoS rules for SSH priority"
+cat <<'QOS_SCRIPT' | cat_as_root /usr/local/bin/setup-qos.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+IFACE="${1:-__SELECTED_IFACE__}"
+
+modprobe ifb 2>/dev/null || true
+ip link show ifb0 >/dev/null 2>&1 || ip link add ifb0 type ifb
+ip link set ifb0 up
+
+# Clear existing rules
+tc qdisc del dev "$IFACE" root 2>/dev/null || true
+
+# Make LOW priority the default so FOOBAR traffic falls there automatically
+tc qdisc add dev "$IFACE" root handle 1: htb default 20
+
+# High priority class for admin access
+tc class add dev "$IFACE" parent 1: classid 1:10 htb rate 5mbit ceil 1000mbit prio 0
+tc qdisc add dev "$IFACE" parent 1:10 handle 110: fq_codel
+
+# Low priority class for FOOBAR / everything else
+tc class add dev "$IFACE" parent 1: classid 1:20 htb rate 512kbit ceil 1000mbit prio 7
+tc qdisc add dev "$IFACE" parent 1:20 handle 120: fq_codel
+
+# SSH
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 6 0xff match ip dport 22 0xffff flowid 1:10
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 6 0xff match ip sport 22 0xffff flowid 1:10
+
+# Raspberry Connect fallback port
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 6 0xff match ip dport 2222 0xffff flowid 1:10
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 6 0xff match ip sport 2222 0xffff flowid 1:10
+
+# Tailscale UDP
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 17 0xff match ip dport 41641 0xffff flowid 1:10
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 17 0xff match ip sport 41641 0xffff flowid 1:10
+
+# Pi Connect / control traffic on 443
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 6 0xff match ip dport 443 0xffff flowid 1:10
+tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 6 0xff match ip sport 443 0xffff flowid 1:10
+QOS_SCRIPT
+
+sed -i "s/__SELECTED_IFACE__/$IFACE/g" /usr/local/bin/setup-qos.sh
+
+# Apply QoS rules
+sleep 2
+if ip link show "$IFACE" >/dev/null 2>&1; then
+    /usr/local/bin/setup-qos.sh "$IFACE"
+else
+    echo "ERROR: Network interface $IFACE not ready"
+fi
+
+
+# =========================
+# 8. Install Resource Monitor with Time Awareness
+# =========================
+echo "==> 8) Installing comprehensive resource monitor"
+cat <<'MONITOR_SCRIPT' | cat_as_root /usr/local/bin/resource-monitor.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Configuration
+INI_FILE="/opt/itarmy/bin/foobar.ini"
+SERVICE_NAME="foobar_proxy_linux"
+SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service.d/90-dynamic-limits.conf"
+LOG_FILE="/var/log/foobar/resource-monitor.log"
+mkdir -p "/var/log/foobar"
+
+MAX_LOAD=__MAX_LOAD__
+MAX_TEMP=__MAX_TEMP__
+MAX_NET_LATENCY=__MAX_NET_LATENCY__
+IFACE="__SELECTED_IFACE__"
+FULL_THROTTLE_START="__FULL_THROTTLE_START__"
+FULL_THROTTLE_END="__FULL_THROTTLE_END__"
+CPU_MAX_FREQ_DAY=__CPU_MAX_FREQ_DAY__
+CPU_MAX_FREQ_NIGHT=__CPU_MAX_FREQ_NIGHT__
+CPU_GOVERNOR="__CPU_GOVERNOR__"
+USB_AUTOSUSPEND=__USB_AUTOSUSPEND__
+DIRTY_WRITEBACK_LOW=__DIRTY_WRITEBACK_LOW__
+DIRTY_WRITEBACK_HIGH=__DIRTY_WRITEBACK_HIGH__
+MAX_CPU_DAY=__MAX_CPU_DAY__
+MAX_CPU_NIGHT=__MAX_CPU_NIGHT__
+MAX_MEM=__MAX_MEM__
+APP_NICE=__APP_NICE__
+APP_CPU_QUOTA_DAY="__APP_CPU_QUOTA_DAY__"
+APP_CPU_QUOTA_NIGHT="__APP_CPU_QUOTA_NIGHT__"
+APP_MEM_MAX_DAY="__APP_MEM_MAX_DAY__"
+APP_MEM_MAX_NIGHT="__APP_MEM_MAX_NIGHT__"
+MIN_THREADS=__MIN_THREADS__
+MAX_THREADS_DAY=__MAX_THREADS_DAY__
+MAX_THREADS_NIGHT=__MAX_THREADS_NIGHT__
+THREAD_STEP_UP=__THREAD_STEP_UP__
+THREAD_STEP_DOWN=__THREAD_STEP_DOWN__
+
+# Get current time and determine if it's "night time" (full throttle)
+is_night_time() {
+    local now=$(date +%H:%M)
+    [[ "$now" > "$FULL_THROTTLE_START" ]] || [[ "$now" < "$FULL_THROTTLE_END" ]]
+}
+
+# Get system metrics
+get_metrics() {
+    local load=$(uptime | awk -F'load average: ' '{print $2}' | awk '{print $3}' | cut -d, -f1)
+    local cpu
+    cpu=$(top -bn1 | awk -F'id,' '/Cpu\\(s\\)/ {gsub(/^[ \t]+|[ \t]+$/, "", $1); split($1,a,","); gsub(/.* /,"",a[length(a)]); print 100 - a[length(a)]}' || true)
+    [[ -n "$cpu" ]] || cpu=0
+    
+    local mem
+    mem=$(free | awk '/Mem:/ {printf "%.0f", $3/$2 * 100}' || true)
+    [[ -n "$mem" ]] || mem=0
+
+    local temp
+    temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null | awk '{print $1/1000}' || true)
+    [[ -n "$temp" ]] || temp=0
+
+    local gw
+    gw=$(ip route | awk '/default/ {print $3; exit}' || true)
+
+    local latency=999
+    if [[ -n "$gw" ]]; then
+        latency=$(ping -c 3 "$gw" 2>/dev/null | tail -1 | awk -F'/' '{print $5}' | cut -d. -f1 || true)
+    fi
+    [[ -n "$latency" ]] || latency=999
+    
+    local rx_errors
+    local tx_errors
+    rx_errors=$(ip -s link show "$IFACE" | awk '/RX:/ {getline; print $3; exit}' || true)
+    tx_errors=$(ip -s link show "$IFACE" | awk '/TX:/ {getline; print $3; exit}' || true)
+    [[ -n "$rx_errors" ]] || rx_errors=0
+    [[ -n "$tx_errors" ]] || tx_errors=0
+    
+    local retries
+    retries=$(iwconfig "$IFACE" 2>/dev/null | grep -c "Retry" || true)
+    [[ -n "$retries" ]] || retries=0
+
+    # Get FOOBAR-specific metrics
+    local foobar_pid=$(pgrep -f "/opt/itarmy/bin/foobar_proxy_linux" | head -1)
+    local foobar_cpu="0"
+    local foobar_mem="0"
+    local foobar_threads="0"
+    if [[ -n "$foobar_pid" ]]; then
+        foobar_cpu=$(ps -p $foobar_pid -o %cpu | tail -1)
+        foobar_mem=$(ps -p $foobar_pid -o %mem | tail -1)
+        foobar_threads=$(ps -p $foobar_pid -o nlwp | tail -1)
+    fi
+
+    echo "$load $cpu $mem $temp $latency $tx_errors $rx_errors $retries $foobar_cpu $foobar_mem $foobar_threads"
+    echo "$(date -Is) Load=$load, CPU=$cpu%, MEM=$mem%, Temp=${temp}C, Latency=${latency}ms, TX-Err=$tx_errors, RX-Err=$rx_errors, Retries=$retries, FOOBAR-CPU=$foobar_cpu%, FOOBAR-MEM=$foobar_mem%, FOOBAR-Threads=$foobar_threads" >> "$LOG_FILE"
+}
+
+# Update systemd limits
+update_limits() {
+    local cpu_quota=$1
+    local mem_max=$2
+
+    mkdir -p "$(dirname "$SERVICE_UNIT")"
+    {
+      echo "[Service]"
+      echo "CPUQuota=$cpu_quota"
+      echo "MemoryMax=$mem_max"
+      echo "Nice=$APP_NICE"
+    } > "$SERVICE_UNIT"
+    chown root:root "$SERVICE_UNIT"
+    chmod 0644 "$SERVICE_UNIT"
+
+    systemctl daemon-reload
+    systemctl set-property --runtime "$SERVICE_NAME" CPUQuota="$cpu_quota" MemoryMax="$mem_max" Nice="$APP_NICE" >/dev/null 2>&1 || true
+}
+
+# Adjust settings based on metrics
+adjust_settings() {
+    read load cpu mem temp latency tx_errors rx_errors retries foobar_cpu foobar_mem foobar_threads <<< "$(get_metrics)"
+    local restart_needed=0
+    local night_time=$(is_night_time && echo "1" || echo "0")
+
+    # EMERGENCY: If any critical threshold exceeded
+    if (( $(echo "$load > $MAX_LOAD" | bc -l) )) || \
+       (( $(echo "$temp > $MAX_TEMP" | bc -l) )) || \
+       (( $(echo "$latency > $MAX_NET_LATENCY" | bc -l) )); then
+        echo "$(date -Is) EMERGENCY: Threshold exceeded. Scaling DOWN!" >> "$LOG_FILE"
+
+        # Reduce to minimum settings
+        sed -i "s/threads = .*/threads = $MIN_THREADS/" "$INI_FILE"
+        sed -i "s/copies = .*/copies = 1/" "$INI_FILE"
+        update_limits "25%" "$APP_MEM_MAX_DAY"
+        restart_needed=1
+    else
+        # Time-based settings
+        if [[ "$night_time" -eq 1 ]]; then
+            max_cpu=$MAX_CPU_NIGHT
+            max_threads=$MAX_THREADS_NIGHT
+            max_mem="$APP_MEM_MAX_NIGHT"
+            target_quota="$APP_CPU_QUOTA_NIGHT"
+        else
+            max_cpu=$MAX_CPU_DAY
+            max_threads=$MAX_THREADS_DAY
+            max_mem="$APP_MEM_MAX_DAY"
+            target_quota="$APP_CPU_QUOTA_DAY"
+        fi
+
+        # Power optimization based on current load
+        if (( $(echo "$load < ($MAX_LOAD - 0.8)" | bc -l) )) && [[ "$night_time" -eq 0 ]]; then
+            echo "$(date -Is) Low load detected. Applying power savings..." >> "$LOG_FILE"
+        
+            # Apply daytime CPU frequency limit
+            for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+                [[ -w "$f" ]] && echo "$CPU_GOVERNOR" > "$f"
+            done
+            
+            for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq; do
+                [[ -w "$f" ]] && echo "$CPU_MAX_FREQ_DAY" > "$f"
+            done        
+            # Enable USB auto-suspend for non-critical devices
+            if [[ "$USB_AUTOSUSPEND" -eq 1 ]]; then
+                for usb in /sys/bus/usb/devices/*; do
+                    [[ -w "$usb/power/control" ]] || continue
+                    echo "auto" > "$usb/power/control"
+                done
+            fi
+        
+            # Reduce filesystem sync frequency
+            sysctl -w vm.dirty_writeback_centisecs=$DIRTY_WRITEBACK_LOW >/dev/null 2>&1
+        elif (( $(echo "$load > $MAX_LOAD" | bc -l) )) || [[ "$night_time" -eq 1 ]]; then
+            echo "$(date -Is) High load or night time. Maximizing performance..." >> "$LOG_FILE"
+        
+            # Restore full CPU frequency
+            for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq; do
+                [[ -w "$f" ]] && echo "$CPU_MAX_FREQ_NIGHT" > "$f"
+            done
+
+            # Disable USB auto-suspend for all devices
+            if [[ "$USB_AUTOSUSPEND" -eq 1 ]]; then
+                for usb in /sys/bus/usb/devices/*; do
+                    [[ -w "$usb/power/control" ]] || continue
+                    [[ -e "$usb/net/$IFACE" ]] && continue
+                    echo "on" > "$usb/power/control"
+                done
+            fi
+        
+            # Increase filesystem performance
+            sysctl -w vm.dirty_writeback_centisecs=$DIRTY_WRITEBACK_HIGH >/dev/null 2>&1
+        fi
+
+        # Scale based on current usage
+        if (( $(echo "$cpu > $max_cpu" | bc -l) )) || (( $(echo "$mem > $MAX_MEM" | bc -l) )); then
+            echo "$(date -Is) High resource usage. Scaling DOWN..." >> "$LOG_FILE"
+
+            # Reduce threads
+            local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
+            if [[ $threads -gt $MIN_THREADS ]]; then
+                threads=$((threads - THREAD_STEP_DOWN))
+                [[ $threads -lt $MIN_THREADS ]] && threads=$MIN_THREADS
+                sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
+                restart_needed=1
+            fi
+
+            # Reduce systemd CPU quota
+            local current_quota
+            current_quota=$(grep "CPUQuota=" "$SERVICE_UNIT" 2>/dev/null | awk -F= '{print $2}' | tr -d '%' || true)
+            [[ -n "$current_quota" ]] || current_quota=40
+            if [[ -n "$current_quota" ]] && [[ $current_quota -gt 20 ]]; then
+                new_quota=$((current_quota - 10))
+                update_limits "${new_quota}%" "$max_mem"
+                restart_needed=1
+            fi
+            elif (( $(echo "$cpu < ($max_cpu - 15)" | bc -l) )) && \
+                 (( $(echo "$mem < ($MAX_MEM - 15)" | bc -l) )) && \
+                 (( $(echo "$load < ($MAX_LOAD - 0.6)" | bc -l) )); then
+            echo "$(date -Is) Low resource usage. Scaling UP..." >> "$LOG_FILE"
+
+            # Increase threads
+            local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
+            if [[ $threads -lt $max_threads ]]; then
+                threads=$((threads + THREAD_STEP_UP))
+                [[ $threads -gt $max_threads ]] && threads=$max_threads
+                sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
+                restart_needed=1
+            fi
+
+            # Increase systemd CPU quota
+            local current_quota
+            current_quota=$(grep "CPUQuota=" "$SERVICE_UNIT" 2>/dev/null | awk -F= '{print $2}' | tr -d '%' || true)
+            [[ -n "$current_quota" ]] || current_quota=40
+            if [[ -n "$current_quota" ]] && [[ $current_quota -lt $((max_cpu-10)) ]]; then
+                new_quota=$((current_quota + 10))
+                update_limits "${new_quota}%" "$max_mem"
+                restart_needed=1
+            fi
+        fi
+    fi
+
+    if [[ "$restart_needed" -eq 1 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Main monitoring loop
+main() {
+    if adjust_settings; then
+        echo "$(date -Is) Restarting $SERVICE_NAME..." >> "$LOG_FILE"
+        systemctl restart "$SERVICE_NAME"
+    fi
+}
+
+main
+MONITOR_SCRIPT
+
+sed -i "s/__SELECTED_IFACE__/$IFACE/g" /usr/local/bin/resource-monitor.sh
+
+sed -i "s/__MAX_LOAD__/$MAX_LOAD/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MAX_TEMP__/$MAX_TEMP/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MAX_NET_LATENCY__/$MAX_NET_LATENCY/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__FULL_THROTTLE_START__/$FULL_THROTTLE_START/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__FULL_THROTTLE_END__/$FULL_THROTTLE_END/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__CPU_MAX_FREQ_DAY__/$CPU_MAX_FREQ_DAY/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__CPU_MAX_FREQ_NIGHT__/$CPU_MAX_FREQ_NIGHT/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__CPU_GOVERNOR__/$CPU_GOVERNOR/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__USB_AUTOSUSPEND__/$USB_AUTOSUSPEND/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__DIRTY_WRITEBACK_LOW__/$DIRTY_WRITEBACK_LOW/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__DIRTY_WRITEBACK_HIGH__/$DIRTY_WRITEBACK_HIGH/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MAX_CPU_DAY__/$MAX_CPU_DAY/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MAX_CPU_NIGHT__/$MAX_CPU_NIGHT/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MAX_MEM__/$MAX_MEM/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__APP_NICE__/$APP_NICE/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__APP_CPU_QUOTA_DAY__/$APP_CPU_QUOTA_DAY/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__APP_CPU_QUOTA_NIGHT__/$APP_CPU_QUOTA_NIGHT/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__APP_MEM_MAX_DAY__/$APP_MEM_MAX_DAY/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__APP_MEM_MAX_NIGHT__/$APP_MEM_MAX_NIGHT/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MIN_THREADS__/$MIN_THREADS/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MAX_THREADS_DAY__/$MAX_THREADS_DAY/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MAX_THREADS_NIGHT__/$MAX_THREADS_NIGHT/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__THREAD_STEP_UP__/$THREAD_STEP_UP/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__THREAD_STEP_DOWN__/$THREAD_STEP_DOWN/g" /usr/local/bin/resource-monitor.sh
+
+# Systemd service for monitor
+cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.service 0644
+[Unit]
+Description=Resource Monitor for FOOBAR
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/resource-monitor.sh
+Restart=on-failure
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Systemd timer for monitor (check every 15s)
+cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.timer 0644
+[Unit]
+Description=Run resource monitor every 15s
+
+[Timer]
+OnBootSec=10s
+OnUnitActiveSec=10s
+AccuracySec=1s
+Unit=resource-monitor.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Enable and start monitor
+systemctl daemon-reload
+systemctl enable --now resource-monitor.timer
+systemctl start resource-monitor.service
+
+# =========================
+# 8. Install Crash Protection
+# =========================
+echo "==> 8) Setting up crash protection"
+cat <<'CRASH_SCRIPT' | cat_as_root /usr/local/bin/crash-protection.sh 0755
+#!/usr/bin/env bash
+set -euo pipefail
+
+IFACE="__SELECTED_IFACE__"
+
+# Check if FOOBAR is running
+# Remove the `if` condition and always run:
+echo "$(date -Is) Checking FOOBAR status..." >> /var/log/foobar/crash-protection.log
+if ! systemctl is-active --quiet foobar_proxy_linux; then
+    echo "$(date -Is) FOOBAR crashed. Restarting..." >> /var/log/foobar/crash-protection.log
+    systemctl restart foobar_proxy_linux
+    sleep 2
+    if ! systemctl is-active --quiet foobar_proxy_linux; then
+        echo "Failed to restart FOOBAR service"
+    fi
+
+    # Reset power optimizations after crash
+    for f in /sys/devices/system/cpu/cpu*/cpufreq/scaling_max_freq; do
+        [[ -w "$f" ]] && echo "1400000" > "$f"
+    done
+
+    for usb in /sys/bus/usb/devices/*; do
+        [[ -w "$usb/power/control" ]] || continue
+        echo "on" > "$usb/power/control"
+    done
+    sysctl -w vm.dirty_writeback_centisecs=500 >/dev/null 2>&1
+    echo "$(date -Is) Reset power optimizations after crash" >> /var/log/foobar/crash-protection.log
+fi
+
+if journalctl -u foobar_proxy_linux --no-pager -n 50 2>/dev/null | grep -q "Restarting too often"; then
+    echo "$(date -Is) Too many crashes. Reducing settings..." >> /var/log/foobar/crash-protection.log
+    sed -i "s/threads = .*/threads = 256/" /opt/itarmy/bin/foobar.ini
+    sed -i "s/copies = .*/copies = 1/" /opt/itarmy/bin/foobar.ini
+    systemctl restart foobar_proxy_linux
+    sleep 2
+    if ! systemctl is-active --quiet foobar_proxy_linux; then
+        echo "Failed to restart FOOBAR service"
+    fi
+
+fi
+
+CRASH_SCRIPT
+
+sed -i "s/__SELECTED_IFACE__/$IFACE/g" /usr/local/bin/crash-protection.sh
+
+# Systemd service for crash protection
+cat <<EOF | cat_as_root /etc/systemd/system/crash-protection.service 0644
+[Unit]
+Description=Crash Protection for FOOBAR
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/crash-protection.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Systemd timer for crash protection (check every 30s)
+cat <<EOF | cat_as_root /etc/systemd/system/crash-protection.timer 0644
+[Unit]
+Description=Run crash protection every 30s
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=1s
+Unit=crash-protection.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Enable crash protection
+systemctl daemon-reload
+systemctl enable --now crash-protection.timer
+systemctl start crash-protection.service
+
+# =========================
+# 9. Final Setup
+# =========================
+echo "==> 9) Finalizing setup"
+systemctl enable --now foobar_proxy_linux.service
+systemctl restart foobar_proxy_linux
+
+echo "Setup complete!"
+echo "Monitor logs: tail -f /var/log/foobar/resource-monitor.log"
+echo "Crash logs: tail -f /var/log/foobar/crash-protection.log"
+echo "System status: htop"
+echo "Temperature: cat /sys/class/thermal/thermal_zone0/temp"
+
+# =========================
+# 10. Final Verification
+# =========================
+echo "==> 10) Running final verification checks"
+
+# Check binary
+if [[ ! -f "${ITARMY_BIN}" ]]; then
+    echo "ERROR: FOOBAR binary not found at ${ITARMY_BIN}"
+    exit 1
+fi
+
+# Check service file
+if [[ ! -f "/etc/systemd/system/foobar_proxy_linux.service" ]]; then
+    echo "ERROR: FOOBAR service file not found"
+    exit 1
+fi
+
+# Reload systemd to ensure the service is recognized
+systemctl daemon-reload
+
+# Check service unit more directly
+if [[ ! -f /etc/systemd/system/foobar_proxy_linux.service ]]; then
+    echo "ERROR: FOOBAR service file not found on disk"
+    exit 1
+fi
+
+if ! systemctl status foobar_proxy_linux.service >/dev/null 2>&1; then
+    systemctl daemon-reload
+    sleep 2
+fi
+
+# Check if service is enabled
+if ! systemctl is-enabled foobar_proxy_linux; then
+    echo "Enabling FOOBAR service..."
+    systemctl enable foobar_proxy_linux
+fi
+
+# Start service if not running
+if ! systemctl is-active foobar_proxy_linux; then
+    echo "Starting FOOBAR service..."
+    systemctl start foobar_proxy_linux
+    sleep 2
+fi
+
+# Check service status
+if systemctl is-active foobar_proxy_linux; then
+    echo "FOOBAR service is running successfully"
+else
+    echo "ERROR: FOOBAR service failed to start"
+    journalctl -u foobar_proxy_linux -n 20 --no-pager
+    exit 1
+fi
+
