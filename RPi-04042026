@@ -1033,7 +1033,7 @@ systemctl daemon-reload
 
 # Check service unit more directly
 if [[ ! -f /etc/systemd/system/foobar_proxy_linux.service ]]; then
-    echo "ERROR: MHDDOS service file not found on disk"
+    echo "ERROR: FOOBAR service file not found on disk"
     exit 1
 fi
 
