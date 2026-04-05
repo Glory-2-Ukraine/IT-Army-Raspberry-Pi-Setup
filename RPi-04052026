@@ -21,7 +21,7 @@ exec > >(tee -a /var/log/foobar/setup.log) 2>&1
 set -x
 echo "$(date -Is) Script started"
 
-# Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi-04042026 -o /usr/local/bin/setup.sh && chmod +x /usr/local/bin/setup.sh && /usr/local/bin/setup.sh"
+# Run this with: sudo bash -c "curl -sSL https://raw.githubusercontent.com/Glory-2-Ukraine/IT-Army-Raspberry-Pi-Setup/refs/heads/main/RPi-04052026 -o /usr/local/bin/setup.sh && chmod +x /usr/local/bin/setup.sh && /usr/local/bin/setup.sh"
 
 # =========================
 # FOOBAR Raspberry Pi 4B Optimized Setup
@@ -37,6 +37,11 @@ echo "$(date -Is) Script started"
 APP_NAME="foobar_proxy_linux"
 
 # Resource limits
+EMERGENCY_CPU_QUOTA="25%"
+LOAD_LOW_HEADROOM="0.8"
+LOAD_SCALEUP_HEADROOM="0.6"
+CPU_SCALEUP_HEADROOM="15"
+MEM_SCALEUP_HEADROOM="15"
 APP_CPU_QUOTA_DAY="65%"       # Daytime CPU limit
 APP_CPU_QUOTA_NIGHT="90%"     # Nighttime CPU limit
 APP_MEM_MAX="1024M"           # Hard max
@@ -617,9 +622,6 @@ tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 6 
 tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 17 0xff match ip dport 41641 0xffff flowid 1:10
 tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 17 0xff match ip sport 41641 0xffff flowid 1:10
 
-# Pi Connect / control traffic on 443
-tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 6 0xff match ip dport 443 0xffff flowid 1:10
-tc filter add dev "$IFACE" protocol ip parent 1: prio 1 u32 match ip protocol 6 0xff match ip sport 443 0xffff flowid 1:10
 QOS_SCRIPT
 
 sed -i "s/__SELECTED_IFACE__/$IFACE/g" /usr/local/bin/setup-qos.sh
@@ -839,11 +841,16 @@ adjust_settings() {
             # Reduce systemd CPU quota
             local current_quota
             current_quota=$(grep "CPUQuota=" "$SERVICE_UNIT" 2>/dev/null | awk -F= '{print $2}' | tr -d '%' || true)
-            [[ -n "$current_quota" ]] || current_quota=40
+            if [[ -z "$current_quota" ]]; then
+                if [[ "$night_time" -eq 1 ]]; then
+                    current_quota=${APP_CPU_QUOTA_NIGHT%\%}
+                else
+                    current_quota=${APP_CPU_QUOTA_DAY%\%}
+                fi
+            fi
             if [[ -n "$current_quota" ]] && [[ $current_quota -gt 20 ]]; then
                 new_quota=$((current_quota - 10))
                 update_limits "${new_quota}%" "$max_mem"
-                restart_needed=1
             fi
             elif (( $(echo "$cpu < ($max_cpu - 15)" | bc -l) )) && \
                  (( $(echo "$mem < ($MAX_MEM - 15)" | bc -l) )) && \
@@ -862,7 +869,13 @@ adjust_settings() {
             # Increase systemd CPU quota
             local current_quota
             current_quota=$(grep "CPUQuota=" "$SERVICE_UNIT" 2>/dev/null | awk -F= '{print $2}' | tr -d '%' || true)
-            [[ -n "$current_quota" ]] || current_quota=40
+            if [[ -z "$current_quota" ]]; then
+                if [[ "$night_time" -eq 1 ]]; then
+                    current_quota=${APP_CPU_QUOTA_NIGHT%\%}
+                else
+                    current_quota=${APP_CPU_QUOTA_DAY%\%}
+                fi
+            fi
             if [[ -n "$current_quota" ]] && [[ $current_quota -lt $((max_cpu-10)) ]]; then
                 new_quota=$((current_quota + 10))
                 update_limits "${new_quota}%" "$max_mem"
