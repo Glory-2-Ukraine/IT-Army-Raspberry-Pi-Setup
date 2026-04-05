@@ -37,7 +37,7 @@ echo "$(date -Is) Script started"
 APP_NAME="foobar_proxy_linux"
 
 # Resource limits
-APP_CPU_QUOTA_DAY="40%"      # Daytime CPU limit
+APP_CPU_QUOTA_DAY="25%"      # Daytime CPU limit
 APP_CPU_QUOTA_NIGHT="80%"    # Nighttime CPU limit (midnight-6am)
 APP_MEM_MAX="768M"           # Memory limit
 APP_NICE=19                  # Nice value
@@ -52,7 +52,7 @@ TIMER_SEC=15                  # Watchdog check interval
 GW_MISS_MAX=3                 # Gateway miss threshold
 
 # Thresholds
-MAX_LOAD=4.0                  # Max 15-min load average
+MAX_LOAD=0.8                  # Max 15-min load average
 MAX_TEMP=70                   # Max CPU temp in Celsius
 MAX_CPU_DAY=60                # Max CPU% during day
 MAX_CPU_NIGHT=90              # Max CPU% during night
@@ -788,7 +788,7 @@ adjust_settings() {
         
             # Reduce filesystem sync frequency
             sysctl -w vm.dirty_writeback_centisecs=$DIRTY_WRITEBACK_LOW >/dev/null 2>&1
-        elif (( $(echo "$load > 4.0" | bc -l) )) || [[ "$night_time" -eq 1 ]]; then
+        elif (( $(echo "$load > $MAX_LOAD" | bc -l) )) || [[ "$night_time" -eq 1 ]]; then
             echo "$(date -Is) High load or night time. Maximizing performance..." >> "$LOG_FILE"
         
             # Restore full CPU frequency
@@ -815,11 +815,13 @@ adjust_settings() {
 
             # Reduce threads
             local threads=$(grep "threads =" "$INI_FILE" | awk '{print $3}')
-            if [[ $threads -gt 256 ]]; then
-                threads=$((threads - 256))
-                sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
-                changed=1
+            if [[ $threads -gt 512 ]]; then
+                threads=$((threads - 512))
+            else
+                threads=128
             fi
+            sed -i "s/threads = .*/threads = $threads/" "$INI_FILE"
+            changed=1
 
             # Reduce systemd CPU quota
             local current_quota
@@ -899,8 +901,8 @@ cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.timer 0644
 Description=Run resource monitor every 15s
 
 [Timer]
-OnBootSec=15s
-OnUnitActiveSec=15s
+OnBootSec=10s
+OnUnitActiveSec=10s
 AccuracySec=1s
 Unit=resource-monitor.service
 
