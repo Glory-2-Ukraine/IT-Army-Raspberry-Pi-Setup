@@ -56,6 +56,8 @@ MAX_LOAD=0.8                  # Max 15-min load average
 MAX_TEMP=70                   # Max CPU temp in Celsius
 MAX_CPU_DAY=60                # Max CPU% during day
 MAX_CPU_NIGHT=90              # Max CPU% during night
+APP_MEM_MAX_DAY="512M"
+APP_MEM_MAX_NIGHT="768M"
 MAX_MEM=85                    # Max memory usage %
 MAX_NET_LATENCY=200           # Max ping latency to gateway (ms)
 
@@ -644,19 +646,22 @@ SERVICE_NAME="foobar_proxy_linux"
 SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service.d/90-dynamic-limits.conf"
 LOG_FILE="/var/log/foobar/resource-monitor.log"
 mkdir -p "/var/log/foobar"
-MAX_LOAD=4.0
-MAX_TEMP=70
-MAX_NET_LATENCY=200
+MAX_LOAD=__MAX_LOAD__
+MAX_TEMP=__MAX_TEMP__
+MAX_NET_LATENCY=__MAX_NET_LATENCY__
 IFACE="__SELECTED_IFACE__"
-FULL_THROTTLE_START="00:00"
-FULL_THROTTLE_END="06:00"
-CPU_MAX_FREQ_DAY=1200000
-CPU_MAX_FREQ_NIGHT=1400000
-CPU_GOVERNOR="performance"
-USB_AUTOSUSPEND=0
-DIRTY_WRITEBACK_LOW=3000
-DIRTY_WRITEBACK_HIGH=500
-
+FULL_THROTTLE_START="__FULL_THROTTLE_START__"
+FULL_THROTTLE_END="__FULL_THROTTLE_END__"
+CPU_MAX_FREQ_DAY=__CPU_MAX_FREQ_DAY__
+CPU_MAX_FREQ_NIGHT=__CPU_MAX_FREQ_NIGHT__
+CPU_GOVERNOR="__CPU_GOVERNOR__"
+USB_AUTOSUSPEND=__USB_AUTOSUSPEND__
+DIRTY_WRITEBACK_LOW=__DIRTY_WRITEBACK_LOW__
+DIRTY_WRITEBACK_HIGH=__DIRTY_WRITEBACK_HIGH__
+MAX_CPU_DAY=__MAX_CPU_DAY__
+MAX_CPU_NIGHT=__MAX_CPU_NIGHT__
+MAX_MEM=__MAX_MEM__
+APP_NICE=__APP_NICE__
 
 # Get current time and determine if it's "night time" (full throttle)
 is_night_time() {
@@ -756,12 +761,12 @@ adjust_settings() {
         # Time-based settings
         if [[ "$night_time" -eq 1 ]]; then
             # Night time: Full throttle
-            max_cpu=90
+            max_cpu=$MAX_CPU_NIGHT
             max_threads=4096
-            max_mem="768M"
+            max_mem="$APP_MEM_MAX"
         else
             # Day time: Conservative
-            max_cpu=60
+            max_cpu=$MAX_CPU_DAY
             max_threads=2048
             max_mem="512M"
         fi
@@ -810,7 +815,7 @@ adjust_settings() {
         fi
 
         # Scale based on current usage
-        if (( $(echo "$cpu > $max_cpu" | bc -l) )) || (( $(echo "$mem > 85" | bc -l) )); then
+        if (( $(echo "$cpu > $max_cpu" | bc -l) )) || (( $(echo "$mem > $MAX_MEM" | bc -l) )); then
             echo "$(date -Is) High resource usage. Scaling DOWN..." >> "$LOG_FILE"
 
             # Reduce threads
@@ -876,6 +881,22 @@ main
 MONITOR_SCRIPT
 
 sed -i "s/__SELECTED_IFACE__/$IFACE/g" /usr/local/bin/resource-monitor.sh
+
+sed -i "s/__MAX_LOAD__/$MAX_LOAD/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MAX_TEMP__/$MAX_TEMP/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MAX_NET_LATENCY__/$MAX_NET_LATENCY/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__FULL_THROTTLE_START__/$FULL_THROTTLE_START/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__FULL_THROTTLE_END__/$FULL_THROTTLE_END/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__CPU_MAX_FREQ_DAY__/$CPU_MAX_FREQ_DAY/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__CPU_MAX_FREQ_NIGHT__/$CPU_MAX_FREQ_NIGHT/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__CPU_GOVERNOR__/$CPU_GOVERNOR/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__USB_AUTOSUSPEND__/$USB_AUTOSUSPEND/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__DIRTY_WRITEBACK_LOW__/$DIRTY_WRITEBACK_LOW/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__DIRTY_WRITEBACK_HIGH__/$DIRTY_WRITEBACK_HIGH/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MAX_CPU_DAY__/$MAX_CPU_DAY/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MAX_CPU_NIGHT__/$MAX_CPU_NIGHT/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__MAX_MEM__/$MAX_MEM/g" /usr/local/bin/resource-monitor.sh
+sed -i "s/__APP_NICE__/$APP_NICE/g" /usr/local/bin/resource-monitor.sh
 
 # Systemd service for monitor
 cat <<EOF | cat_as_root /etc/systemd/system/resource-monitor.service 0644
