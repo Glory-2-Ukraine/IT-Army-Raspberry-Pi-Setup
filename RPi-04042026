@@ -37,7 +37,7 @@ echo "$(date -Is) Script started"
 APP_NAME="foobar_proxy_linux"
 
 # Resource limits
-APP_CPU_QUOTA_DAY="25%"      # Daytime CPU limit
+APP_CPU_QUOTA_DAY="40%"      # Daytime CPU limit
 APP_CPU_QUOTA_NIGHT="80%"    # Nighttime CPU limit (midnight-6am)
 APP_MEM_MAX="768M"           # Memory limit
 APP_NICE=19                  # Nice value
@@ -52,7 +52,7 @@ TIMER_SEC=15                  # Watchdog check interval
 GW_MISS_MAX=3                 # Gateway miss threshold
 
 # Thresholds
-MAX_LOAD=0.8                  # Max 15-min load average
+MAX_LOAD=2.0                  # Max 15-min load average
 MAX_TEMP=70                   # Max CPU temp in Celsius
 MAX_CPU_DAY=60                # Max CPU% during day
 MAX_CPU_NIGHT=90              # Max CPU% during night
