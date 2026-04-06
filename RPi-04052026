@@ -766,7 +766,7 @@ adjust_settings() {
         # Reduce to minimum settings
         sed -i "s/threads = .*/threads = $MIN_THREADS/" "$INI_FILE"
         sed -i "s/copies = .*/copies = 1/" "$INI_FILE"
-        update_limits "25%" "$APP_MEM_MAX_DAY"
+    update_limits "__EMERGENCY_CPU_QUOTA__" "$APP_MEM_MAX_DAY"
         restart_needed=1
     else
         # Time-based settings
@@ -879,7 +879,6 @@ adjust_settings() {
             if [[ -n "$current_quota" ]] && [[ $current_quota -lt $((max_cpu-10)) ]]; then
                 new_quota=$((current_quota + 10))
                 update_limits "${new_quota}%" "$max_mem"
-                restart_needed=1
             fi
         fi
     fi
@@ -903,7 +902,7 @@ main
 MONITOR_SCRIPT
 
 sed -i "s/__SELECTED_IFACE__/$IFACE/g" /usr/local/bin/resource-monitor.sh
-
+sed -i "s/__EMERGENCY_CPU_QUOTA__/$EMERGENCY_CPU_QUOTA/g" /usr/local/bin/resource-monitor.sh
 sed -i "s/__MAX_LOAD__/$MAX_LOAD/g" /usr/local/bin/resource-monitor.sh
 sed -i "s/__MAX_TEMP__/$MAX_TEMP/g" /usr/local/bin/resource-monitor.sh
 sed -i "s/__MAX_NET_LATENCY__/$MAX_NET_LATENCY/g" /usr/local/bin/resource-monitor.sh
